@@ -1,0 +1,21 @@
+"""Constants for CANDY HOUSE BLE."""
+
+from datetime import timedelta
+
+DOMAIN = "candy_house_ble"
+
+CONF_DEVICE_ID = "device_id"
+CONF_MODEL = "model"
+CONF_QR_IMAGE = "qr_image"
+CONF_SECRET_KEY = "secret_key"
+
+MODEL_SESAME_5_PRO = 7
+MODEL_NAMES = {MODEL_SESAME_5_PRO: "SESAME 5 Pro"}
+
+SERVICE_UUID = "0000fd81-0000-1000-8000-00805f9b34fb"
+WRITE_CHARACTERISTIC_UUID = "16860002-a5ae-9856-b6d3-dbb4c676993e"
+NOTIFY_CHARACTERISTIC_UUID = "16860003-a5ae-9856-b6d3-dbb4c676993e"
+
+POLL_INTERVAL = timedelta(seconds=30)
+CONNECT_TIMEOUT = 20.0
+STATUS_TIMEOUT = 12.0

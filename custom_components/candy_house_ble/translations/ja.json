@@ -1,0 +1,38 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "このCANDY HOUSEデバイスはすでに設定されています。"
+    },
+    "error": {
+      "device_not_found": "接続可能なBluetoothスキャナーからSESAMEが見つかりません。",
+      "invalid_qr": "対応するSESAME共有QRを画像から読み取れませんでした。",
+      "manager_key_required": "マネージャー共有QRが必要です。オーナー鍵とゲスト鍵は受け付けません。"
+    },
+    "step": {
+      "user": {
+        "data": {
+          "qr_image": "マネージャー共有QR画像"
+        },
+        "description": "マネージャー共有QRを含む画像をアップロードします。画像はHome Assistant内でデコード後に削除され、解析した認証情報だけが保存されます。",
+        "title": "CANDY HOUSE BLEデバイスを追加"
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "battery_low": {
+        "name": "電池残量低下"
+      }
+    },
+    "sensor": {
+      "state": {
+        "name": "状態",
+        "state": {
+          "locked": "施錠",
+          "moved": "中間位置",
+          "unlocked": "解錠"
+        }
+      }
+    }
+  }
+}

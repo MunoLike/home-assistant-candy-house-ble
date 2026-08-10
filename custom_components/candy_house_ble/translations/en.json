@@ -1,0 +1,38 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "This CANDY HOUSE device is already configured."
+    },
+    "error": {
+      "device_not_found": "The SESAME is not currently visible through a connectable Bluetooth scanner.",
+      "invalid_qr": "The image does not contain a supported SESAME share QR code.",
+      "manager_key_required": "A manager share QR is required. Owner and guest keys are not accepted."
+    },
+    "step": {
+      "user": {
+        "data": {
+          "qr_image": "Manager share QR image"
+        },
+        "description": "Upload an image containing the manager share QR. Home Assistant deletes the image after local decoding and stores only the parsed credential.",
+        "title": "Add CANDY HOUSE BLE device"
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "battery_low": {
+        "name": "Battery low"
+      }
+    },
+    "sensor": {
+      "state": {
+        "name": "State",
+        "state": {
+          "locked": "Locked",
+          "moved": "Moved",
+          "unlocked": "Unlocked"
+        }
+      }
+    }
+  }
+}
