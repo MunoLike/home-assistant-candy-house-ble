@@ -8,6 +8,7 @@ import pytest
 
 from custom_components.candy_house_ble.const import SERVICE_UUID
 from custom_components.candy_house_ble.discovery import (
+    advertisement_has_history,
     advertisement_matches,
     async_resolve_with_scan,
     find_matching_service_info,
@@ -16,8 +17,11 @@ from custom_components.candy_house_ble.discovery import (
 DEVICE_ID = bytes.fromhex("12345678123456781234567812345678")
 
 
-def manufacturer_payload(model: int = 7, device_id: bytes = DEVICE_ID) -> bytes:
-    return bytes((model, 0, 0)) + device_id
+def manufacturer_payload(
+    model: int = 7, device_id: bytes = DEVICE_ID, *, has_history: bool = False
+) -> bytes:
+    flags = 0b10 if has_history else 0
+    return bytes((model, 0, flags)) + device_id
 
 
 def service_info(address: str, *, device_id: bytes = DEVICE_ID):
@@ -31,6 +35,18 @@ def service_info(address: str, *, device_id: bytes = DEVICE_ID):
 def test_advertisement_matches_model_and_uuid() -> None:
     assert advertisement_matches(
         [SERVICE_UUID.upper()], {0x055A: manufacturer_payload()}, 7, DEVICE_ID
+    )
+
+
+def test_advertisement_history_flag_is_identity_scoped() -> None:
+    assert advertisement_has_history(
+        {0x055A: manufacturer_payload(has_history=True)}, 7, DEVICE_ID
+    )
+    assert not advertisement_has_history(
+        {0x055A: manufacturer_payload(has_history=False)}, 7, DEVICE_ID
+    )
+    assert not advertisement_has_history(
+        {0x055A: manufacturer_payload(has_history=True)}, 6, DEVICE_ID
     )
 
 

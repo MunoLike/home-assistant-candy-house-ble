@@ -8,6 +8,7 @@ from cryptography.hazmat.primitives.ciphers import algorithms
 from cryptography.hazmat.primitives.ciphers.aead import AESCCM
 
 from custom_components.candy_house_ble.protocol import (
+    ITEM_HISTORY,
     ITEM_LOGIN,
     ITEM_MECH_STATUS,
     OP_PUBLISH,
@@ -51,6 +52,36 @@ def test_build_login_packet_is_the_only_authenticated_transmit() -> None:
 
     assert packet == bytes((3, ITEM_LOGIN)) + session_key()[:4]
     assert len(packet) == 6
+
+
+def test_build_history_request_is_fixed_to_read_mode() -> None:
+    _packet, cipher = build_login_packet(SECRET_KEY, TOKEN)
+
+    packet = cipher.build_history_request_packet()
+
+    assert packet[0] == (SEGMENT_CIPHER << 1) | 1
+    plaintext = AESCCM(session_key(), tag_length=4).decrypt(
+        bytes(8) + b"\x00" + TOKEN,
+        packet[1:],
+        b"\x00",
+    )
+    assert plaintext == bytes((ITEM_HISTORY, 1))
+
+
+def test_history_request_uses_monotonic_outbound_nonce() -> None:
+    _packet, cipher = build_login_packet(SECRET_KEY, TOKEN)
+    first = cipher.build_history_request_packet()
+    second = cipher.build_history_request_packet()
+    aes = AESCCM(session_key(), tag_length=4)
+
+    assert aes.decrypt(bytes(8) + b"\x00" + TOKEN, first[1:], b"\x00") == bytes(
+        (ITEM_HISTORY, 1)
+    )
+    assert aes.decrypt(
+        (1).to_bytes(8, "little") + b"\x00" + TOKEN,
+        second[1:],
+        b"\x00",
+    ) == bytes((ITEM_HISTORY, 1))
 
 
 def test_parse_encrypted_mechanism_notification() -> None:

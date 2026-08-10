@@ -16,9 +16,14 @@ def test_read_only_protocol_has_no_operation_path() -> None:
 
     assert "ITEM_LOCK" not in source
     assert "ITEM_UNLOCK" not in source
+    assert "ITEM_HISTORY_DELETE" not in source
+    assert "build_command" not in source
     assert "def encrypt" not in source
     assert "async_lock" not in source
     assert "async_unlock" not in source
+
+    protocol = (COMPONENT / "protocol.py").read_text(encoding="utf-8")
+    assert "bytes((ITEM_HISTORY, 1))" in protocol
 
 
 def test_manifest_uses_final_domain_and_local_polling() -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
@@ -11,12 +12,15 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     CONNECT_TIMEOUT,
+    HISTORY_MAX_RECORDS,
+    HISTORY_TIMEOUT,
     NOTIFY_CHARACTERISTIC_UUID,
     STATUS_TIMEOUT,
     WRITE_CHARACTERISTIC_UUID,
 )
-from .discovery import async_resolve_service_info
+from .discovery import advertisement_has_history, async_resolve_service_info
 from .protocol import (
+    ITEM_HISTORY,
     ITEM_INITIAL,
     ITEM_LOGIN,
     ITEM_MECH_STATUS,
@@ -36,6 +40,14 @@ _LOGGER = logging.getLogger(__name__)
 
 class SesameConnectionError(Exception):
     """Raised when a read-only BLE status fetch fails."""
+
+
+@dataclass(frozen=True, slots=True)
+class SesameReadResult:
+    """One mechanism status plus best-effort raw history probe records."""
+
+    status: MechanismStatus
+    history_records: tuple[bytes, ...]
 
 
 class SesameStatusClient:
@@ -58,18 +70,21 @@ class SesameStatusClient:
         self._cipher: ReadOnlyCipher | None = None
         self._client: BleakClientWithServiceCache | None = None
         self._status_event = asyncio.Event()
+        self._login_event = asyncio.Event()
+        self._history_event = asyncio.Event()
         self._status: MechanismStatus | None = None
+        self._history_payload: bytes | None = None
         self._notification_lock = asyncio.Lock()
         self._notification_tasks: set[asyncio.Task[None]] = set()
         self._notification_error: Exception | None = None
         self._operation_lock = asyncio.Lock()
 
-    async def async_read_status(self) -> MechanismStatus:
+    async def async_read_status(self) -> SesameReadResult:
         """Fetch one authenticated mechanism status through HA Bluetooth."""
         async with self._operation_lock:
             return await self._async_read_status_locked()
 
-    async def _async_read_status_locked(self) -> MechanismStatus:
+    async def _async_read_status_locked(self) -> SesameReadResult:
         """Fetch status while holding the single-connection lock."""
         service_info = await async_resolve_service_info(
             self._hass, self._model, self._device_id
@@ -79,11 +94,19 @@ class SesameStatusClient:
                 "SESAME is not reachable by a connectable scanner"
             )
 
+        has_history = advertisement_has_history(
+            service_info.manufacturer_data,
+            self._model,
+            self._device_id,
+        )
         self._receiver = SegmentReceiver()
         self._cipher = None
         self._status = None
+        self._history_payload = None
         self._notification_error = None
         self._status_event.clear()
+        self._login_event.clear()
+        self._history_event.clear()
 
         try:
             async with asyncio.timeout(CONNECT_TIMEOUT):
@@ -107,7 +130,16 @@ class SesameStatusClient:
                 raise SesameConnectionError(
                     "SESAME disconnected before publishing status"
                 )
-            return self._status
+            history_records: tuple[bytes, ...] = ()
+            if has_history:
+                try:
+                    history_records = await self._async_collect_history()
+                except Exception:
+                    _LOGGER.debug(
+                        "Unable to retrieve SESAME history probe records",
+                        exc_info=True,
+                    )
+            return SesameReadResult(self._status, history_records)
         except TimeoutError as err:
             raise SesameConnectionError(
                 "Timed out waiting for SESAME status"
@@ -118,6 +150,40 @@ class SesameStatusClient:
             raise SesameConnectionError("Unable to read SESAME status") from err
         finally:
             await self._async_disconnect()
+
+    async def _async_collect_history(self) -> tuple[bytes, ...]:
+        """Read a bounded history batch without acknowledging or deleting it."""
+        records: list[bytes] = []
+        try:
+            async with asyncio.timeout(HISTORY_TIMEOUT):
+                await self._login_event.wait()
+                if self._notification_error is not None:
+                    raise self._notification_error
+                if self._cipher is None or self._client is None:
+                    raise SesameConnectionError("SESAME history session disappeared")
+
+                for _ in range(HISTORY_MAX_RECORDS):
+                    self._history_payload = None
+                    self._history_event.clear()
+                    await self._client.write_gatt_char(
+                        WRITE_CHARACTERISTIC_UUID,
+                        self._cipher.build_history_request_packet(),
+                        response=False,
+                    )
+                    await self._history_event.wait()
+                    if self._notification_error is not None:
+                        raise self._notification_error
+                    if self._history_payload is None:
+                        raise SesameConnectionError(
+                            "SESAME history response disappeared"
+                        )
+                    if not self._history_payload:
+                        break
+                    records.append(self._history_payload)
+        except TimeoutError:
+            pass
+
+        return tuple(records)
 
     def _on_notification(self, _sender: Any, data: bytearray) -> None:
         task = self._hass.async_create_task(
@@ -155,11 +221,25 @@ class SesameStatusClient:
                 if (
                     notification.opcode == OP_RESPONSE
                     and notification.item_code == ITEM_LOGIN
-                    and notification.result_code != 0
                 ):
-                    raise SesameConnectionError(
-                        "SESAME rejected the manager credential"
-                    )
+                    if notification.result_code != 0:
+                        raise SesameConnectionError(
+                            "SESAME rejected the manager credential"
+                        )
+                    self._login_event.set()
+                    return
+
+                if (
+                    notification.opcode == OP_RESPONSE
+                    and notification.item_code == ITEM_HISTORY
+                ):
+                    if notification.result_code != 0:
+                        raise SesameConnectionError(
+                            "SESAME rejected the history request"
+                        )
+                    self._history_payload = notification.payload
+                    self._history_event.set()
+                    return
 
                 if (
                     notification.opcode == OP_PUBLISH
@@ -170,9 +250,13 @@ class SesameStatusClient:
             except Exception as err:
                 self._notification_error = err
                 self._status_event.set()
+                self._login_event.set()
+                self._history_event.set()
 
     def _on_disconnect(self, _client: BleakClientWithServiceCache) -> None:
         self._status_event.set()
+        self._login_event.set()
+        self._history_event.set()
 
     async def _async_disconnect(self) -> None:
         client, self._client = self._client, None
