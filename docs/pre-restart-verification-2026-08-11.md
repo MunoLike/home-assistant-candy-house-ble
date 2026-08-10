@@ -17,6 +17,15 @@
 
 The prior architecture review returned **REVISE**. The required revisions are present in this milestone: real credentials stay outside Git, QR decoder compatibility was tested on amd64 CPython 3.13, addresses are re-resolved from advertisement identity, the deployment is read-only, and the prototype integration remains available for rollback.
 
+## First runtime attempt and remediation
+
+The first configuration-flow launch failed before the form loaded. Home Assistant
+Core could not install `zxing-cpp==3.1.1`: that release has no musllinux wheel,
+so Core attempted a source build and failed because its runtime image does not
+contain CMake. The integration now pins `pyrxing==0.6.1`, which provides a
+CPython 3.14 musllinux wheel for the HAOS architecture. QR credentials were not
+opened or processed during the failed attempt.
+
 ## Increment log
 
 - Repository/HACS skeleton and recorded implementation plan — validated by JSON parsing, lint, and compile checks.
@@ -26,9 +35,9 @@ The prior architecture review returned **REVISE**. The required revisions are pr
 - Production staging — exact component diff passed.
 - HA preflight — `ha core check` passed.
 
-## Remaining unverified runtime behavior
+## Remaining unverified runtime behavior after remediation
 
-- HA Core installing and importing `zxing-cpp==3.1.1` during the real config flow.
+- HA Core installing and importing `pyrxing==0.6.1` during the real config flow.
 - Mobile/frontend file selection and Core-managed upload lifecycle in the running HA instance.
 - Discovery and authenticated reads through the installed ESPHome Bluetooth proxy.
 - Entity creation, repeated polling, disconnect recovery, and address changes after restart.

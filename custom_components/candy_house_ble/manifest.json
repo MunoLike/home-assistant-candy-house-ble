@@ -8,6 +8,6 @@
   "integration_type": "device",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/Khronos31/home-assistant-candy-house-ble/issues",
-  "requirements": ["zxing-cpp==3.1.1"],
+  "requirements": ["pyrxing==0.6.1"],
   "version": "0.1.0"
 }

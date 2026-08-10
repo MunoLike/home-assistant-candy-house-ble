@@ -29,4 +29,4 @@ def test_manifest_uses_final_domain_and_local_polling() -> None:
     assert manifest["domain"] == "candy_house_ble"
     assert manifest["name"] == "CANDY HOUSE BLE"
     assert manifest["iot_class"] == "local_polling"
-    assert manifest["requirements"] == ["zxing-cpp==3.1.1"]
+    assert manifest["requirements"] == ["pyrxing==0.6.1"]

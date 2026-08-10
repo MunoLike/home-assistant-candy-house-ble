@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-import zxingcpp
 from PIL import Image, UnidentifiedImageError
+from pyrxing import BarcodeDecodeError, ImageError, read_barcode
 
 from .const import MODEL_NAMES
 
@@ -78,15 +78,11 @@ def decode_share_qr_image(path: Path) -> SesameCredential:
     """Decode one QR image and parse its SESAME share credential."""
     try:
         with Image.open(path) as image:
-            result = zxingcpp.read_barcode(image)
-    except (OSError, UnidentifiedImageError) as err:
+            result = read_barcode(image, formats=["QRCode"])
+    except (BarcodeDecodeError, ImageError, OSError, UnidentifiedImageError) as err:
         raise QRCodeError("Invalid QR image") from err
 
-    if (
-        result is None
-        or result.format != zxingcpp.BarcodeFormat.QRCode
-        or not result.text
-    ):
+    if result is None or result.format != "QRCode" or not result.text:
         raise QRCodeError("No QR code found")
 
     credential = parse_share_uri(result.text)

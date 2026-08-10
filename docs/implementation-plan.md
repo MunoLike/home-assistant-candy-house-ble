@@ -52,7 +52,9 @@ Before restart, remove `/config/custom_components/candy_house_ble`; no running H
 
 - Scope: pure credential parser, image decoder, FileSelector config-flow adapter, and guaranteed uploaded-file cleanup.
 - Verification: synthetic QR tests plus dependency installation on amd64 CPython.
-- Risk: `zxing-cpp` may import locally but fail to install inside HA Core.
+- Runtime result: `zxing-cpp` had no musllinux wheel and failed to build in HA Core.
+  It was replaced with the pinned `pyrxing` wheel, which publishes CPython 3.14
+  musllinux builds for both x86_64 and aarch64.
 
 ### 3. Read-only BLE protocol
 
