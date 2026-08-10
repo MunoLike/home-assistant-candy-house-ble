@@ -10,7 +10,7 @@ the SESAME.
 ## Acceptance criteria
 
 1. `python -m pytest -q` exits 0 for a constrained encrypted OS3 history-read
-   request, multi-segment history responses, end-of-history handling, record
+   request, a single bounded head-record response, timeout handling, record
    parsing, deduplication, and entity event delivery.
 2. A source gate proves that the integration contains no OS3 lock item (82),
    unlock item (83), history-delete item (18), generic encrypted-command API,
@@ -53,6 +53,18 @@ the SESAME.
 - Do not manually access or edit `secrets.yaml`, `.ssh`, or `.storage`.
 - Do not restart Home Assistant without fresh, explicit user approval.
 
+## Runtime finding — 2026-08-11
+
+With Hub3 temporarily disconnected, a real SESAME 5 Pro returned one 16-byte
+record repeatedly for every item-4 request. Contrary to the initial assumption
+from the ESP32 demo's request loop, the device did not advance to the next
+record or return an empty response without item 18 deletion. The repeated
+record contained a four-byte record ID, a one-byte history type, a little-endian
+Unix timestamp, and the seven-byte mechanism status. The integration therefore
+requests only one head record per connection and deduplicates it; it still never
+sends item 18. Rapid consecutive operations can overwrite which head record HA
+observes, so the resulting local feed is explicitly best-effort.
+
 ## Rollback
 
 Before restart, restore the deployed component from the last committed source.
@@ -64,8 +76,8 @@ entities then resume their prior behavior; no device history is deleted.
 
 ### 1. Protocol and secure runtime probe
 
-- Scope: fixed encrypted history-read packet, history response collection,
-  empty-response termination, and temporary mode-0600 raw capture outside Git.
+- Scope: fixed encrypted history-read packet, one head-record response per
+  connection, and temporary mode-0600 deduplicated raw capture outside Git.
 - Verification: deterministic AES-CCM/segmentation tests and the source safety
   gate; then an explicitly approved Core restart and one manual operation.
 - Risk: the public SDK uploads opaque records to its server, so the local raw

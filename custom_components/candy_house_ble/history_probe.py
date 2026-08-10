@@ -22,6 +22,23 @@ def append_history_probe_records(
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     directory.chmod(0o700)
     path = directory / PROBE_FILENAME
+    existing_payloads: set[str] = set()
+    if path.exists():
+        try:
+            existing_payloads = {
+                json.loads(line)["payload_hex"]
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line
+            }
+        except (json.JSONDecodeError, KeyError, OSError, TypeError):
+            existing_payloads = set()
+
+    records = tuple(
+        record for record in records if record.hex() not in existing_payloads
+    )
+    if not records:
+        return path
+
     received_at = datetime.now(UTC).isoformat()
     lines = "".join(
         json.dumps(

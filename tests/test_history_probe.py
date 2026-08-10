@@ -14,7 +14,7 @@ from custom_components.candy_house_ble.history_probe import (
 def test_history_probe_is_private_and_append_only(tmp_path: Path) -> None:
     path = append_history_probe_records(str(tmp_path), (b"first", b"second"))
     assert path is not None
-    append_history_probe_records(str(tmp_path), (b"third",))
+    append_history_probe_records(str(tmp_path), (b"second", b"third"))
 
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(path.stat().st_mode) == 0o600

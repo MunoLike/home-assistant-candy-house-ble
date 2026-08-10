@@ -149,8 +149,8 @@ async def test_status_and_history_are_collected_in_one_session(
     result = await client.async_read_status()
 
     assert result.status.state is LockState.LOCKED
-    assert result.history_records == (b"record-one", b"record-two")
-    assert peripheral.history_requests == 3
+    assert result.history_records == (b"record-one",)
+    assert peripheral.history_requests == 1
     assert peripheral.is_connected is False
 
 
@@ -176,10 +176,10 @@ async def test_history_is_skipped_without_advertised_pending_flag(
 
 
 @pytest.mark.asyncio
-async def test_partial_history_is_kept_when_budget_expires(
+async def test_history_timeout_does_not_fail_the_status_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    peripheral = FakeSesame([b"record-before-timeout"], terminate_history=False)
+    peripheral = FakeSesame([], terminate_history=False)
     await install_fake_transport(monkeypatch, peripheral, has_history=True)
     monkeypatch.setattr(client_module, "HISTORY_TIMEOUT", 0.01)
     client = SesameStatusClient(
@@ -192,6 +192,7 @@ async def test_partial_history_is_kept_when_budget_expires(
 
     result = await client.async_read_status()
 
-    assert result.history_records == (b"record-before-timeout",)
-    assert peripheral.history_requests == 2
+    assert result.status.state is LockState.LOCKED
+    assert result.history_records == ()
+    assert peripheral.history_requests == 1
     assert peripheral.is_connected is False
