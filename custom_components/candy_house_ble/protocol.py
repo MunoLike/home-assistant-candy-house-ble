@@ -47,6 +47,7 @@ class MechanismStatus:
     battery_low: bool
     critical: bool
     stopped: bool
+    rssi: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from typing import Any
 
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
@@ -36,6 +37,16 @@ _LOGGER = logging.getLogger(__name__)
 
 class SesameConnectionError(Exception):
     """Raised when a read-only BLE status fetch fails."""
+
+
+def service_info_rssi(service_info: Any) -> int | None:
+    """Return optional RSSI without making mechanism status depend on it."""
+    try:
+        value = service_info.rssi
+    except Exception:
+        _LOGGER.debug("Bluetooth service information has no usable RSSI", exc_info=True)
+        return None
+    return value if isinstance(value, int) else None
 
 
 class SesameStatusClient:
@@ -107,7 +118,7 @@ class SesameStatusClient:
                 raise SesameConnectionError(
                     "SESAME disconnected before publishing status"
                 )
-            return self._status
+            return replace(self._status, rssi=service_info_rssi(service_info))
         except TimeoutError as err:
             raise SesameConnectionError(
                 "Timed out waiting for SESAME status"

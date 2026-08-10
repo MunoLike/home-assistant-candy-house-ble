@@ -22,9 +22,24 @@
     "binary_sensor": {
       "battery_low": {
         "name": "電池残量低下"
+      },
+      "mechanism_error": {
+        "name": "機構エラー"
+      },
+      "moving": {
+        "name": "動作中"
       }
     },
     "sensor": {
+      "battery_voltage": {
+        "name": "バッテリー電圧"
+      },
+      "position": {
+        "name": "サムターン角度"
+      },
+      "signal_strength": {
+        "name": "信号強度"
+      },
       "state": {
         "name": "状態",
         "state": {

@@ -17,5 +17,37 @@
         "title": "Add CANDY HOUSE BLE device"
       }
     }
+  },
+  "entity": {
+    "binary_sensor": {
+      "battery_low": {
+        "name": "Battery low"
+      },
+      "mechanism_error": {
+        "name": "Mechanism error"
+      },
+      "moving": {
+        "name": "Moving"
+      }
+    },
+    "sensor": {
+      "battery_voltage": {
+        "name": "Battery voltage"
+      },
+      "position": {
+        "name": "Position"
+      },
+      "signal_strength": {
+        "name": "Signal strength"
+      },
+      "state": {
+        "name": "State",
+        "state": {
+          "locked": "Locked",
+          "moved": "Moved",
+          "unlocked": "Unlocked"
+        }
+      }
+    }
   }
 }

@@ -79,6 +79,7 @@ def test_parse_encrypted_mechanism_notification() -> None:
     assert status.battery_low is True
     assert status.critical is True
     assert status.stopped is True
+    assert status.rssi is None
 
 
 def test_parse_plain_response() -> None:

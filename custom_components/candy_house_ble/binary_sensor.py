@@ -20,7 +20,13 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up SESAME diagnostic binary sensors."""
-    async_add_entities([SesameBatteryLowSensor(entry)])
+    async_add_entities(
+        [
+            SesameBatteryLowSensor(entry),
+            SesameMovingSensor(entry),
+            SesameMechanismErrorSensor(entry),
+        ]
+    )
 
 
 class SesameBatteryLowSensor(CandyHouseEntity, BinarySensorEntity):
@@ -39,3 +45,39 @@ class SesameBatteryLowSensor(CandyHouseEntity, BinarySensorEntity):
         if self.coordinator.data is None:
             return None
         return self.coordinator.data.battery_low
+
+
+class SesameMovingSensor(CandyHouseEntity, BinarySensorEntity):
+    """Represent whether the SESAME mechanism is moving."""
+
+    _attr_device_class = BinarySensorDeviceClass.MOVING
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_translation_key = "moving"
+
+    def __init__(self, entry: CandyHouseConfigEntry) -> None:
+        super().__init__(entry, "moving")
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return whether the mechanism reports that it is not stopped."""
+        if self.coordinator.data is None:
+            return None
+        return not self.coordinator.data.stopped
+
+
+class SesameMechanismErrorSensor(CandyHouseEntity, BinarySensorEntity):
+    """Represent the SESAME mechanism critical-error flag."""
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_translation_key = "mechanism_error"
+
+    def __init__(self, entry: CandyHouseConfigEntry) -> None:
+        super().__init__(entry, "mechanism_error")
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return whether the mechanism reports a critical error."""
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.critical

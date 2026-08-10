@@ -7,6 +7,15 @@ through Home Assistant Bluetooth and ESPHome Bluetooth proxies. Setup accepts a
 manager share QR image, decodes it inside Home Assistant, stores only the parsed
 credential in the Home Assistant config entry, and deletes the uploaded image.
 
+The read-only entities currently expose mechanism state, battery-critical state,
+battery voltage, Bluetooth signal strength, thumb-turn angle, movement, and
+mechanism errors. A poll uses one short BLE session and does not send a physical
+lock command.
+
+Movement is a snapshot taken at the 15-second poll, not an event detector; a
+short movement between polls can be missed. The RSSI entity is disabled by
+default to avoid noisy Recorder history and can be enabled from the device page.
+
 ## Status
 
 This repository is under active development and has no released version yet.
