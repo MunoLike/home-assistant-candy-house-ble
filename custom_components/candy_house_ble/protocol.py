@@ -20,7 +20,6 @@ OP_RESPONSE = 7
 OP_PUBLISH = 8
 
 ITEM_LOGIN = 2
-ITEM_HISTORY = 4
 ITEM_INITIAL = 14
 ITEM_MECH_STATUS = 81
 
@@ -94,26 +93,14 @@ class SegmentReceiver:
 
 
 class ReadOnlyCipher:
-    """Decrypt OS3 notifications and build only the fixed history-read request."""
+    """Decrypt SESAME OS3 notifications; encryption is intentionally absent."""
 
     def __init__(self, session_key: bytes, sesame_token: bytes) -> None:
         if len(session_key) != 16 or len(sesame_token) != 4:
             raise ProtocolError("Invalid OS3 session material")
         self._aes = AESCCM(session_key, tag_length=4)
         self._salt = b"\x00" + sesame_token
-        self._history_request_counter = 0
         self._decrypt_counter = 0
-
-    def build_history_request_packet(self) -> bytes:
-        """Build encrypted OS3 item 4 / mode 1 without a generic command API."""
-        nonce = self._history_request_counter.to_bytes(8, "little") + self._salt
-        self._history_request_counter += 1
-        ciphertext = self._aes.encrypt(
-            nonce,
-            bytes((ITEM_HISTORY, 1)),
-            b"\x00",
-        )
-        return bytes(((SEGMENT_CIPHER << 1) | 1,)) + ciphertext
 
     def decrypt(self, ciphertext: bytes) -> bytes:
         """Decrypt the next inbound notification."""

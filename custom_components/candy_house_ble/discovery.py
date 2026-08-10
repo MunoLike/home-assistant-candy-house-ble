@@ -38,19 +38,6 @@ def advertisement_matches(
     )
 
 
-def advertisement_has_history(
-    manufacturer_data: Mapping[int, bytes], model: int, device_id: bytes
-) -> bool:
-    """Return the OS3 advertisement's pending-history flag for one device."""
-    return any(
-        len(payload) >= 19
-        and payload[0] == model
-        and payload[3:19] == device_id
-        and bool(payload[2] & 0b10)
-        for payload in manufacturer_data.values()
-    )
-
-
 def find_matching_service_info[ServiceInfoT: ServiceInfoLike](
     service_infos: Iterable[ServiceInfoT], model: int, device_id: bytes
 ) -> ServiceInfoT | None:

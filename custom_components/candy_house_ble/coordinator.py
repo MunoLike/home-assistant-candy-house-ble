@@ -11,7 +11,6 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .client import SesameConnectionError, SesameStatusClient
 from .const import CONF_DEVICE_ID, CONF_MODEL, CONF_SECRET_KEY, POLL_INTERVAL
-from .history_probe import append_history_probe_records
 from .protocol import MechanismStatus
 
 _LOGGER = logging.getLogger(__name__)
@@ -38,16 +37,6 @@ class SesameStatusCoordinator(DataUpdateCoordinator[MechanismStatus]):
 
     async def _async_update_data(self) -> MechanismStatus:
         try:
-            result = await self.client.async_read_status()
-            if result.history_records:
-                try:
-                    await self.hass.async_add_executor_job(
-                        append_history_probe_records,
-                        self.hass.config.config_dir,
-                        result.history_records,
-                    )
-                except OSError:
-                    _LOGGER.warning("Unable to write protected history probe")
-            return result.status
+            return await self.client.async_read_status()
         except SesameConnectionError as err:
             raise UpdateFailed(str(err)) from err
