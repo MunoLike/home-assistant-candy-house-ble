@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import time
 from dataclasses import dataclass, replace
 from uuid import UUID
@@ -21,6 +22,8 @@ from .const import (
     CLOUD_HISTORY_TAG,
 )
 from .protocol import ITEM_LOCK, ITEM_UNLOCK, LockState, MechanismStatus
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class SesameCloudError(Exception):
@@ -48,7 +51,7 @@ class SesameCloudHubOfflineError(SesameCloudError):
 
 
 class SesameCloudCommandNotConfirmedError(SesameCloudError):
-    """The cloud accepted a command without a fresh matching shadow."""
+    """The cloud accepted a command without a matching shadow."""
 
 
 def normalize_cloud_secret_key(value: str) -> str:
@@ -216,7 +219,7 @@ class SesameCloudCommandClient:
         *,
         timestamp: int | None = None,
     ) -> MechanismStatus:
-        """Send once, then confirm a fresh target state without command retry."""
+        """Send once, then confirm the target state without command retry."""
         async with self._operation_lock:
             command_timestamp = (
                 int(time.time()) if timestamp is None else int(timestamp)
@@ -244,15 +247,22 @@ class SesameCloudCommandClient:
             for _attempt in range(CLOUD_CONFIRM_ATTEMPTS):
                 await asyncio.sleep(CLOUD_CONFIRM_DELAY)
                 status = await self.async_get_status()
+                _LOGGER.debug(
+                    "Cloud confirmation %d/%d: requested=%s observed=%s "
+                    "timestamp=%s command_timestamp=%s hub_online=%s",
+                    _attempt + 1,
+                    CLOUD_CONFIRM_ATTEMPTS,
+                    target,
+                    status.state,
+                    status.timestamp,
+                    command_timestamp,
+                    status.hub_online,
+                )
                 if status.hub_online is False:
                     raise SesameCloudHubOfflineError(
                         "CANDY HOUSE cloud reports that Hub 3 is offline"
                     )
-                is_fresh = (
-                    status.timestamp is not None
-                    and status.timestamp >= command_timestamp
-                )
-                if is_fresh and status.state is target:
+                if status.state is target:
                     return replace(
                         before,
                         state=target,
@@ -265,6 +275,6 @@ class SesameCloudCommandClient:
                         stopped=True,
                     )
             raise SesameCloudCommandNotConfirmedError(
-                "CANDY HOUSE cloud accepted the command but no fresh matching "
+                "CANDY HOUSE cloud accepted the command but no matching "
                 "lock state was observed"
             )

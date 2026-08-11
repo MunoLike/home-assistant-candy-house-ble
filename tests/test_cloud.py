@@ -169,16 +169,12 @@ async def test_fixed_command_posts_once_and_confirms_fresh_shadow(
 
 
 @pytest.mark.asyncio
-async def test_stale_shadow_never_confirms_or_retries_command(monkeypatch) -> None:
+async def test_matching_shadow_confirms_when_cloud_timestamp_lags(
+    monkeypatch,
+) -> None:
     session = FakeSession(
         [
             FakeResponse(200, {"statusCode": 200}),
-            FakeResponse(
-                200,
-                cloud_status(
-                    LockState.LOCKED, timestamp=FIXED_TIMESTAMP - 10
-                ),
-            ),
             FakeResponse(
                 200,
                 cloud_status(
@@ -196,8 +192,32 @@ async def test_stale_shadow_never_confirms_or_retries_command(monkeypatch) -> No
         "custom_components.candy_house_ble.cloud.asyncio.sleep", AsyncMock()
     )
 
+    result = await cloud.async_lock(status(LockState.UNLOCKED))
+
+    assert result.state is LockState.LOCKED
+    assert [request[0] for request in session.requests] == ["POST", "GET"]
+
+
+@pytest.mark.asyncio
+async def test_wrong_shadow_never_confirms_or_retries_command(monkeypatch) -> None:
+    session = FakeSession(
+        [
+            FakeResponse(200, {"statusCode": 200}),
+            FakeResponse(200, cloud_status(LockState.UNLOCKED)),
+            FakeResponse(200, cloud_status(LockState.UNLOCKED)),
+        ]
+    )
+    cloud = client(session)
+    monkeypatch.setattr(
+        "custom_components.candy_house_ble.cloud.time.time",
+        lambda: FIXED_TIMESTAMP,
+    )
+    monkeypatch.setattr(
+        "custom_components.candy_house_ble.cloud.asyncio.sleep", AsyncMock()
+    )
+
     with pytest.raises(SesameCloudCommandNotConfirmedError):
-        await cloud.async_lock(status(LockState.LOCKED))
+        await cloud.async_lock(status(LockState.UNLOCKED))
 
     assert [request[0] for request in session.requests] == ["POST", "GET", "GET"]
 

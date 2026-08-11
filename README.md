@@ -23,9 +23,11 @@ manager key from the setup QR is not interchangeable with that secret.
 
 Remote unlock is disabled by default and must be explicitly enabled in the
 integration options. A command is posted exactly once and is never retried. The
-integration then performs up to two read-only requests to confirm a fresh target
-state. A successful action therefore normally consumes two API requests and at
-most three. [CANDY HOUSE currently documents](https://jp.candyhouse.co/pages/sesame-biz-operation)
+integration then performs up to two read-only requests to confirm the target
+state. The API timestamp is retained for diagnostics but is not compared with
+the Home Assistant host clock because Hub 3 can report a lagging device-event
+timestamp. A successful action therefore normally consumes two API requests and
+at most three. [CANDY HOUSE currently documents](https://jp.candyhouse.co/pages/sesame-biz-operation)
 a free allowance of 1,000 requests per month, so cloud mode is intentionally not
 used for periodic polling.
 
