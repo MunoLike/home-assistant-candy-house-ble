@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 
 from .coordinator import SesameStatusCoordinator
 
-PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR]
+PLATFORMS = [Platform.LOCK, Platform.SENSOR, Platform.BINARY_SENSOR]
 
 type CandyHouseConfigEntry = ConfigEntry[SesameStatusCoordinator]
 

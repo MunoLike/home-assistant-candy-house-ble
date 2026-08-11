@@ -80,6 +80,25 @@ Before restart, remove `/config/custom_components/candy_house_ble`; no running H
 - Verification: repeated live reads and reconnects; later, one explicitly authorized unlock and one lock with observed responses.
 - Risk: physical-security impact; command retries must not repeat an action.
 
+### 7. Lock entity control milestone — 2026-08-11
+
+- Scope: add a primary `lock` entity, fixed authenticated lock/unlock packets,
+  serialized poll/operation sessions, command acknowledgement plus terminal
+  mechanism-state checking, and a compatibility period for the superseded
+  state sensor.
+- Verification: deterministic AES-CCM vectors, mocked GATT success/rejection,
+  lock-state mapping, operation pending-state cleanup, duplicate suppression,
+  full unit tests, lint, compile, JSON validation, exact production sync, and
+  `ha core check`.
+- Safety boundary: there is no toggle, open, registration, key-management, or
+  generic encrypted-command API. The assistant does not perform physical
+  lock/unlock testing; the device owner tests from the Home Assistant UI after
+  a separately approved Core restart.
+- Remaining runtime risk: BLE firmware response and physical actuation remain
+  unverified until that owner-run UI test.
+- Migration gate: retain the legacy state sensor until the new entity has passed
+  that UI test and local consumers have been inventoried and migrated.
+
 ## Red-team gate
 
 The architecture review verdict was **REVISE**. This plan incorporates its required fixes: synthetic-only repository fixtures, QR dependency as the first spike, advertisement-identity resolution, read-only-first deployment, no physical command retry, and coexistence with the prototype integration.

@@ -1,7 +1,7 @@
-"""Read-only CANDY HOUSE SESAME OS3 protocol helpers.
+"""Constrained CANDY HOUSE SESAME OS3 protocol helpers.
 
-This module deliberately has no encrypted transmit path and no generic command
-builder. The only packet it can build is the OS3 login packet.
+Only login, lock, and unlock packets can be built. There is deliberately no
+generic encrypted-command builder.
 """
 
 from __future__ import annotations
@@ -22,6 +22,10 @@ OP_PUBLISH = 8
 ITEM_LOGIN = 2
 ITEM_INITIAL = 14
 ITEM_MECH_STATUS = 81
+ITEM_LOCK = 82
+ITEM_UNLOCK = 83
+
+HISTORY_TAG_ANDROID_USER_BLE = bytes((0, 14))
 
 
 class ProtocolError(Exception):
@@ -93,29 +97,41 @@ class SegmentReceiver:
         return segment_type, payload
 
 
-class ReadOnlyCipher:
-    """Decrypt SESAME OS3 notifications; encryption is intentionally absent."""
+class SesameSessionCipher:
+    """Encrypt and decrypt one authenticated SESAME OS3 BLE session."""
 
     def __init__(self, session_key: bytes, sesame_token: bytes) -> None:
         if len(session_key) != 16 or len(sesame_token) != 4:
             raise ProtocolError("Invalid OS3 session material")
         self._aes = AESCCM(session_key, tag_length=4)
         self._salt = b"\x00" + sesame_token
+        self._encrypt_counter = 0
         self._decrypt_counter = 0
+
+    def _nonce(self, counter: int) -> bytes:
+        return counter.to_bytes(8, "little") + self._salt
+
+    def encrypt(self, plaintext: bytes) -> bytes:
+        """Encrypt the next outbound packet."""
+        nonce = self._nonce(self._encrypt_counter)
+        ciphertext = self._aes.encrypt(nonce, plaintext, b"\x00")
+        self._encrypt_counter += 1
+        return ciphertext
 
     def decrypt(self, ciphertext: bytes) -> bytes:
         """Decrypt the next inbound notification."""
-        nonce = self._decrypt_counter.to_bytes(8, "little") + self._salt
-        self._decrypt_counter += 1
+        nonce = self._nonce(self._decrypt_counter)
         try:
-            return self._aes.decrypt(nonce, ciphertext, b"\x00")
+            plaintext = self._aes.decrypt(nonce, ciphertext, b"\x00")
         except Exception as err:
             raise ProtocolError("SESAME notification authentication failed") from err
+        self._decrypt_counter += 1
+        return plaintext
 
 
 def build_login_packet(
     secret_key: bytes, sesame_token: bytes
-) -> tuple[bytes, ReadOnlyCipher]:
+) -> tuple[bytes, SesameSessionCipher]:
     """Build the sole permitted outbound packet: an OS3 login request."""
     if len(secret_key) != 16 or len(sesame_token) != 4:
         raise ProtocolError("Invalid login material")
@@ -125,11 +141,23 @@ def build_login_packet(
     session_key = signer.finalize()
 
     packet = bytes((3, ITEM_LOGIN)) + session_key[:4]
-    return packet, ReadOnlyCipher(session_key, sesame_token)
+    return packet, SesameSessionCipher(session_key, sesame_token)
+
+
+def build_lock_packet(cipher: SesameSessionCipher) -> bytes:
+    """Build the only permitted SESAME lock packet."""
+    plaintext = bytes((ITEM_LOCK,)) + HISTORY_TAG_ANDROID_USER_BLE
+    return bytes(((SEGMENT_CIPHER << 1) | 1,)) + cipher.encrypt(plaintext)
+
+
+def build_unlock_packet(cipher: SesameSessionCipher) -> bytes:
+    """Build the only permitted SESAME unlock packet."""
+    plaintext = bytes((ITEM_UNLOCK,)) + HISTORY_TAG_ANDROID_USER_BLE
+    return bytes(((SEGMENT_CIPHER << 1) | 1,)) + cipher.encrypt(plaintext)
 
 
 def parse_notification(
-    segment_type: int, payload: bytes, cipher: ReadOnlyCipher | None
+    segment_type: int, payload: bytes, cipher: SesameSessionCipher | None
 ) -> Notification:
     """Parse a complete plain or encrypted notification."""
     if segment_type == SEGMENT_CIPHER:

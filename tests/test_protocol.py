@@ -1,4 +1,4 @@
-"""Tests for the read-only SESAME OS3 protocol."""
+"""Tests for the constrained SESAME OS3 protocol."""
 
 from __future__ import annotations
 
@@ -8,8 +8,10 @@ from cryptography.hazmat.primitives.ciphers import algorithms
 from cryptography.hazmat.primitives.ciphers.aead import AESCCM
 
 from custom_components.candy_house_ble.protocol import (
+    ITEM_LOCK,
     ITEM_LOGIN,
     ITEM_MECH_STATUS,
+    ITEM_UNLOCK,
     OP_PUBLISH,
     OP_RESPONSE,
     SEGMENT_CIPHER,
@@ -17,7 +19,9 @@ from custom_components.candy_house_ble.protocol import (
     LockState,
     ProtocolError,
     SegmentReceiver,
+    build_lock_packet,
     build_login_packet,
+    build_unlock_packet,
     parse_mechanism_status,
     parse_notification,
 )
@@ -51,6 +55,34 @@ def test_build_login_packet_is_the_only_authenticated_transmit() -> None:
 
     assert packet == bytes((3, ITEM_LOGIN)) + session_key()[:4]
     assert len(packet) == 6
+
+
+@pytest.mark.parametrize(
+    ("builder", "expected_item", "expected_packet"),
+    [
+        (build_lock_packet, ITEM_LOCK, "0549ed1487f28ae9"),
+        (build_unlock_packet, ITEM_UNLOCK, "0548ed1489b0abd7"),
+    ],
+)
+def test_build_fixed_actuation_packets(
+    builder, expected_item: int, expected_packet: str
+) -> None:
+    _login, cipher = build_login_packet(SECRET_KEY, TOKEN)
+
+    packet = builder(cipher)
+
+    assert packet.hex() == expected_packet
+    assert expected_item in (ITEM_LOCK, ITEM_UNLOCK)
+
+
+def test_outbound_counter_advances_independently() -> None:
+    _login, cipher = build_login_packet(SECRET_KEY, TOKEN)
+
+    first = build_lock_packet(cipher)
+    second = build_lock_packet(cipher)
+
+    assert first.hex() == "0549ed1487f28ae9"
+    assert second.hex() == "0501f54997b9c40a"
 
 
 def test_parse_encrypted_mechanism_notification() -> None:

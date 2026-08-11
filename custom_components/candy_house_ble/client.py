@@ -1,9 +1,10 @@
-"""One-shot, read-only SESAME 5 Pro BLE client."""
+"""One-shot SESAME 5 Pro BLE status and fixed actuation client."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
@@ -11,6 +12,8 @@ from bleak_retry_connector import BleakClientWithServiceCache, establish_connect
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    COMMAND_COMPLETION_TIMEOUT,
+    COMMAND_TIMEOUT,
     CONNECT_TIMEOUT,
     NOTIFY_CHARACTERISTIC_UUID,
     STATUS_TIMEOUT,
@@ -19,15 +22,20 @@ from .const import (
 from .discovery import async_resolve_service_info
 from .protocol import (
     ITEM_INITIAL,
+    ITEM_LOCK,
     ITEM_LOGIN,
     ITEM_MECH_STATUS,
+    ITEM_UNLOCK,
     OP_PUBLISH,
     OP_RESPONSE,
+    LockState,
     MechanismStatus,
     ProtocolError,
-    ReadOnlyCipher,
     SegmentReceiver,
+    SesameSessionCipher,
+    build_lock_packet,
     build_login_packet,
+    build_unlock_packet,
     parse_mechanism_status,
     parse_notification,
 )
@@ -36,7 +44,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class SesameConnectionError(Exception):
-    """Raised when a read-only BLE status fetch fails."""
+    """Raised when a constrained BLE status or operation session fails."""
 
 
 def service_info_rssi(service_info: Any) -> int | None:
@@ -66,48 +74,58 @@ class SesameStatusClient:
         self._secret_key = secret_key
         self._name = name
         self._receiver = SegmentReceiver()
-        self._cipher: ReadOnlyCipher | None = None
+        self._cipher: SesameSessionCipher | None = None
         self._client: BleakClientWithServiceCache | None = None
+        self._login_event = asyncio.Event()
         self._status_event = asyncio.Event()
+        self._command_event = asyncio.Event()
+        self._status_queue: asyncio.Queue[MechanismStatus | None] = asyncio.Queue()
         self._status: MechanismStatus | None = None
+        self._expected_command_item: int | None = None
+        self._command_result: int | None = None
         self._notification_lock = asyncio.Lock()
         self._notification_tasks: set[asyncio.Task[None]] = set()
         self._notification_error: Exception | None = None
         self._operation_lock = asyncio.Lock()
+        self._actuation_lock = asyncio.Lock()
 
     async def async_read_status(self) -> MechanismStatus:
         """Fetch one authenticated mechanism status through HA Bluetooth."""
         async with self._operation_lock:
             return await self._async_read_status_locked()
 
+    async def async_lock(self) -> MechanismStatus:
+        """Send the fixed SESAME lock command."""
+        return await self._async_actuate(
+            ITEM_LOCK, build_lock_packet, LockState.LOCKED
+        )
+
+    async def async_unlock(self) -> MechanismStatus:
+        """Send the fixed SESAME unlock command."""
+        return await self._async_actuate(
+            ITEM_UNLOCK, build_unlock_packet, LockState.UNLOCKED
+        )
+
+    async def _async_actuate(
+        self,
+        item_code: int,
+        packet_builder: Callable[[SesameSessionCipher], bytes],
+        desired_state: LockState,
+    ) -> MechanismStatus:
+        """Reject duplicate requests, then serialize against status polling."""
+        if self._actuation_lock.locked():
+            raise SesameConnectionError(
+                "Another SESAME lock operation is already in progress"
+            )
+        async with self._actuation_lock, self._operation_lock:
+            return await self._async_execute_command(
+                item_code, packet_builder, desired_state
+            )
+
     async def _async_read_status_locked(self) -> MechanismStatus:
         """Fetch status while holding the single-connection lock."""
-        service_info = await async_resolve_service_info(
-            self._hass, self._model, self._device_id
-        )
-        if service_info is None:
-            raise SesameConnectionError(
-                "SESAME is not reachable by a connectable scanner"
-            )
-
-        self._receiver = SegmentReceiver()
-        self._cipher = None
-        self._status = None
-        self._notification_error = None
-        self._status_event.clear()
-
         try:
-            async with asyncio.timeout(CONNECT_TIMEOUT):
-                self._client = await establish_connection(
-                    BleakClientWithServiceCache,
-                    service_info.device,
-                    self._name,
-                    disconnected_callback=self._on_disconnect,
-                    max_attempts=3,
-                )
-            await self._client.start_notify(
-                NOTIFY_CHARACTERISTIC_UUID, self._on_notification
-            )
+            service_info = await self._async_connect()
 
             async with asyncio.timeout(STATUS_TIMEOUT):
                 await self._status_event.wait()
@@ -129,6 +147,119 @@ class SesameStatusClient:
             raise SesameConnectionError("Unable to read SESAME status") from err
         finally:
             await self._async_disconnect()
+
+    async def _async_execute_command(
+        self,
+        item_code: int,
+        packet_builder: Callable[[SesameSessionCipher], bytes],
+        desired_state: LockState,
+    ) -> MechanismStatus:
+        """Execute one allowlisted command and observe its terminal state."""
+        try:
+            service_info = await self._async_connect()
+
+            async with asyncio.timeout(STATUS_TIMEOUT):
+                await self._login_event.wait()
+            if self._notification_error is not None:
+                raise self._notification_error
+            if self._cipher is None or self._client is None:
+                raise SesameConnectionError(
+                    "SESAME disconnected before command authentication"
+                )
+
+            self._expected_command_item = item_code
+            self._command_result = None
+            self._command_event.clear()
+            # Only statuses published after this command may complete it.
+            self._status_queue = asyncio.Queue()
+            packet = packet_builder(self._cipher)
+            await self._client.write_gatt_char(
+                WRITE_CHARACTERISTIC_UUID, packet, response=False
+            )
+
+            async with asyncio.timeout(COMMAND_TIMEOUT):
+                await self._command_event.wait()
+            if self._notification_error is not None:
+                raise self._notification_error
+            if self._command_result is None:
+                raise SesameConnectionError(
+                    "SESAME disconnected before acknowledging command"
+                )
+            if self._command_result != 0:
+                raise SesameConnectionError(
+                    f"SESAME rejected command with result {self._command_result}"
+                )
+
+            try:
+                async with asyncio.timeout(COMMAND_COMPLETION_TIMEOUT):
+                    while True:
+                        status = await self._status_queue.get()
+                        if status is None:
+                            raise SesameConnectionError(
+                                "SESAME disconnected before reaching "
+                                "the requested state"
+                            )
+                        if status.critical:
+                            raise SesameConnectionError(
+                                "SESAME reported a critical mechanism error"
+                            )
+                        if status.state is desired_state and status.stopped:
+                            return replace(
+                                status, rssi=service_info_rssi(service_info)
+                            )
+                        if status.state is LockState.MOVED and status.stopped:
+                            raise SesameConnectionError(
+                                "SESAME stopped outside the requested lock range"
+                            )
+            except TimeoutError as err:
+                raise SesameConnectionError(
+                    "SESAME acknowledged the command but did not reach "
+                    "the requested state"
+                ) from err
+        except TimeoutError as err:
+            raise SesameConnectionError(
+                "Timed out waiting for SESAME command acknowledgement"
+            ) from err
+        except SesameConnectionError:
+            raise
+        except Exception as err:
+            raise SesameConnectionError("Unable to operate SESAME") from err
+        finally:
+            await self._async_disconnect()
+
+    async def _async_connect(self):
+        """Resolve, connect, and subscribe to one SESAME session."""
+        service_info = await async_resolve_service_info(
+            self._hass, self._model, self._device_id
+        )
+        if service_info is None:
+            raise SesameConnectionError(
+                "SESAME is not reachable by a connectable scanner"
+            )
+
+        self._receiver = SegmentReceiver()
+        self._cipher = None
+        self._status = None
+        self._expected_command_item = None
+        self._command_result = None
+        self._notification_error = None
+        self._login_event.clear()
+        self._status_event.clear()
+        self._command_event.clear()
+        self._status_queue = asyncio.Queue()
+
+        async with asyncio.timeout(CONNECT_TIMEOUT):
+            self._client = await establish_connection(
+                BleakClientWithServiceCache,
+                service_info.device,
+                self._name,
+                disconnected_callback=self._on_disconnect,
+                max_attempts=3,
+            )
+        await self._client.start_notify(
+            NOTIFY_CHARACTERISTIC_UUID, self._on_notification
+        )
+        return service_info
 
     def _on_notification(self, _sender: Any, data: bytearray) -> None:
         task = self._hass.async_create_task(
@@ -166,11 +297,21 @@ class SesameStatusClient:
                 if (
                     notification.opcode == OP_RESPONSE
                     and notification.item_code == ITEM_LOGIN
-                    and notification.result_code != 0
                 ):
-                    raise SesameConnectionError(
-                        "SESAME rejected the manager credential"
-                    )
+                    if notification.result_code != 0:
+                        raise SesameConnectionError(
+                            "SESAME rejected the manager credential"
+                        )
+                    self._login_event.set()
+                    return
+
+                if (
+                    notification.opcode == OP_RESPONSE
+                    and notification.item_code == self._expected_command_item
+                ):
+                    self._command_result = notification.result_code
+                    self._command_event.set()
+                    return
 
                 if (
                     notification.opcode == OP_PUBLISH
@@ -178,12 +319,19 @@ class SesameStatusClient:
                 ):
                     self._status = parse_mechanism_status(notification.payload)
                     self._status_event.set()
+                    self._status_queue.put_nowait(self._status)
             except Exception as err:
                 self._notification_error = err
+                self._login_event.set()
                 self._status_event.set()
+                self._command_event.set()
+                self._status_queue.put_nowait(None)
 
     def _on_disconnect(self, _client: BleakClientWithServiceCache) -> None:
+        self._login_event.set()
         self._status_event.set()
+        self._command_event.set()
+        self._status_queue.put_nowait(None)
 
     async def _async_disconnect(self) -> None:
         client, self._client = self._client, None

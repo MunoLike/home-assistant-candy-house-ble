@@ -41,7 +41,7 @@ async def async_setup_entry(
 
 
 class SesameStateSensor(CandyHouseEntity, SensorEntity):
-    """Represent the observed SESAME mechanism state."""
+    """Represent state during the lock-entity compatibility period."""
 
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options: ClassVar[list[str]] = [state.value for state in LockState]

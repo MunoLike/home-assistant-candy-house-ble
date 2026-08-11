@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .client import SesameConnectionError, SesameStatusClient
@@ -40,3 +42,21 @@ class SesameStatusCoordinator(DataUpdateCoordinator[MechanismStatus]):
             return await self.client.async_read_status()
         except SesameConnectionError as err:
             raise UpdateFailed(str(err)) from err
+
+    async def async_lock(self) -> None:
+        """Lock the SESAME and refresh its observed state."""
+        await self._async_actuate(self.client.async_lock)
+
+    async def async_unlock(self) -> None:
+        """Unlock the SESAME and refresh its observed state."""
+        await self._async_actuate(self.client.async_unlock)
+
+    async def _async_actuate(
+        self, operation: Callable[[], Awaitable[MechanismStatus]]
+    ) -> None:
+        """Run one physical command and publish its observed terminal state."""
+        try:
+            status = await operation()
+        except SesameConnectionError as err:
+            raise HomeAssistantError(str(err)) from err
+        self.async_set_updated_data(status)
