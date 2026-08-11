@@ -41,6 +41,7 @@ from .const import (
     CONF_QR_IMAGE,
     CONF_SECRET_KEY,
     DOMAIN,
+    MODEL_SESAME_5_PRO,
 )
 from .discovery import async_resolve_service_info
 from .qr import (
@@ -61,7 +62,7 @@ def _decode_uploaded_file(
 class CandyHouseBLEConfigFlow(ConfigFlow, domain=DOMAIN):
     """Configure a local CANDY HOUSE BLE device."""
 
-    VERSION = 2
+    VERSION = 3
 
     @staticmethod
     @callback
@@ -123,6 +124,8 @@ class CandyHouseBLEOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Choose whether lock commands use BLE or Hub 3 through cloud."""
+        if self.config_entry.data[CONF_MODEL] != MODEL_SESAME_5_PRO:
+            return self.async_abort(reason="options_not_supported")
         if user_input is not None:
             if user_input[CONF_COMMAND_TRANSPORT] == COMMAND_TRANSPORT_BLE:
                 return self.async_create_entry(
@@ -155,6 +158,8 @@ class CandyHouseBLEOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Validate and store Web API credentials for fixed commands."""
+        if self.config_entry.data[CONF_MODEL] != MODEL_SESAME_5_PRO:
+            return self.async_abort(reason="options_not_supported")
         errors: dict[str, str] = {}
         if user_input is not None:
             try:

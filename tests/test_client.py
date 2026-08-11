@@ -16,6 +16,13 @@ from custom_components.candy_house_ble.client import (
 )
 from custom_components.candy_house_ble.const import WRITE_CHARACTERISTIC_UUID
 from custom_components.candy_house_ble.protocol import (
+    ITEM_INITIAL,
+    ITEM_LOGIN,
+    ITEM_MECH_STATUS,
+    OP_PUBLISH,
+    OP_RESPONSE,
+    SEGMENT_CIPHER,
+    SEGMENT_PLAIN,
     LockState,
     MechanismStatus,
     build_login_packet,
@@ -25,12 +32,30 @@ SECRET_KEY = bytes.fromhex("00112233445566778899aabbccddeeff")
 TOKEN = bytes.fromhex("a1b2c3d4")
 
 
+def segment(segment_type: int, payload: bytes) -> bytes:
+    """Build one complete inbound BLE segment."""
+    return bytes(((segment_type << 1) | 1,)) + payload
+
+
 class BrokenRSSI:
     """Model service information whose RSSI property cannot be read."""
 
     @property
     def rssi(self) -> int:
         raise RuntimeError("scanner data unavailable")
+
+
+class FakeHass:
+    """Run HA-created notification tasks on the current event loop."""
+
+    def __init__(self) -> None:
+        self.tasks: set[asyncio.Task] = set()
+
+    def async_create_task(self, coro, _name):
+        task = asyncio.create_task(coro)
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+        return task
 
 
 @pytest.mark.parametrize(
@@ -58,6 +83,141 @@ def status_client() -> SesameStatusClient:
         SECRET_KEY,
         "Test lock",
     )
+
+
+@pytest.mark.asyncio
+async def test_bot_2_login_and_status_are_read_only() -> None:
+    client = SesameStatusClient(
+        SimpleNamespace(),
+        17,
+        bytes.fromhex("12345678123456781234567812345678"),
+        SECRET_KEY,
+        "Test Bot 2",
+    )
+    gatt = SimpleNamespace(write_gatt_char=AsyncMock())
+    client._client = gatt
+    client._session_generation = 1
+
+    await client._async_handle_notification(
+        1,
+        segment(
+            SEGMENT_PLAIN,
+            bytes((OP_PUBLISH, ITEM_INITIAL)) + TOKEN,
+        ),
+    )
+    expected_login, server_cipher = build_login_packet(SECRET_KEY, TOKEN)
+    await client._async_handle_notification(
+        1,
+        segment(
+            SEGMENT_CIPHER,
+            server_cipher.encrypt(bytes((OP_RESPONSE, ITEM_LOGIN, 0))),
+        ),
+    )
+    await client._async_handle_notification(
+        1,
+        segment(
+            SEGMENT_CIPHER,
+            server_cipher.encrypt(
+                bytes((OP_PUBLISH, ITEM_MECH_STATUS))
+                + (3012).to_bytes(2, "little")
+                + bytes((0b00000110,))
+            ),
+        ),
+    )
+
+    gatt.write_gatt_char.assert_awaited_once_with(
+        WRITE_CHARACTERISTIC_UUID, expected_login, response=False
+    )
+    assert client._status is not None
+    assert client._status.battery_raw == 3012
+    assert client._status.state is LockState.LOCKED
+    assert client._status.stopped is True
+    assert client._status.position is None
+
+
+@pytest.mark.asyncio
+async def test_complete_bot_2_poll_writes_only_login(monkeypatch) -> None:
+    hass = FakeHass()
+    client = SesameStatusClient(
+        hass,
+        17,
+        bytes.fromhex("12345678123456781234567812345678"),
+        SECRET_KEY,
+        "Test Bot 2",
+    )
+    expected_login, server_cipher = build_login_packet(SECRET_KEY, TOKEN)
+    notify_callback = None
+
+    async def start_notify(_characteristic, callback) -> None:
+        nonlocal notify_callback
+        notify_callback = callback
+        callback(
+            None,
+            bytearray(
+                segment(
+                    SEGMENT_PLAIN,
+                    bytes((OP_PUBLISH, ITEM_INITIAL)) + TOKEN,
+                )
+            ),
+        )
+
+    async def write_gatt_char(characteristic, packet, response=False) -> None:
+        assert characteristic == WRITE_CHARACTERISTIC_UUID
+        assert packet == expected_login
+        assert response is False
+        assert notify_callback is not None
+        notify_callback(
+            None,
+            bytearray(
+                segment(
+                    SEGMENT_CIPHER,
+                    server_cipher.encrypt(
+                        bytes((OP_RESPONSE, ITEM_LOGIN, 0))
+                    ),
+                )
+            ),
+        )
+        notify_callback(
+            None,
+            bytearray(
+                segment(
+                    SEGMENT_CIPHER,
+                    server_cipher.encrypt(
+                        bytes((OP_PUBLISH, ITEM_MECH_STATUS))
+                        + (3012).to_bytes(2, "little")
+                        + bytes((0b00000110,))
+                    ),
+                )
+            ),
+        )
+
+    gatt = SimpleNamespace(
+        is_connected=True,
+        start_notify=AsyncMock(side_effect=start_notify),
+        write_gatt_char=AsyncMock(side_effect=write_gatt_char),
+        disconnect=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "custom_components.candy_house_ble.client."
+        "async_resolve_service_info",
+        AsyncMock(return_value=SimpleNamespace(device=object(), rssi=-55)),
+    )
+    monkeypatch.setattr(
+        "custom_components.candy_house_ble.client.establish_connection",
+        AsyncMock(return_value=gatt),
+    )
+
+    status = await client.async_read_status()
+    if hass.tasks:
+        await asyncio.gather(*tuple(hass.tasks))
+
+    assert status.battery_raw == 3012
+    assert status.stopped is True
+    assert gatt.write_gatt_char.await_count == 1
+    gatt.write_gatt_char.assert_awaited_once_with(
+        WRITE_CHARACTERISTIC_UUID, expected_login, response=False
+    )
+    gatt.disconnect.assert_awaited_once_with()
 
 
 def mechanism_status(
@@ -163,6 +323,202 @@ async def test_authentication_error_sends_no_command(monkeypatch) -> None:
         await client.async_unlock()
 
     gatt.write_gatt_char.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["async_lock", "async_unlock"])
+async def test_bot_2_rejects_lock_commands_before_connecting(
+    method_name: str,
+) -> None:
+    client = SesameStatusClient(
+        SimpleNamespace(),
+        17,
+        bytes.fromhex("12345678123456781234567812345678"),
+        SECRET_KEY,
+        "Test Bot 2",
+    )
+
+    with pytest.raises(SesameConnectionError, match="not supported"):
+        await getattr(client, method_name)()
+
+
+@pytest.mark.asyncio
+async def test_bot_2_fixed_script_success(monkeypatch) -> None:
+    client = SesameStatusClient(
+        SimpleNamespace(),
+        17,
+        bytes.fromhex("12345678123456781234567812345678"),
+        SECRET_KEY,
+        "Test Bot 2",
+    )
+    gatt = SimpleNamespace(is_connected=False, write_gatt_char=AsyncMock())
+
+    async def acknowledge(*_args, **_kwargs) -> None:
+        client._command_result = 0
+        client._command_event.set()
+
+    gatt.write_gatt_char.side_effect = acknowledge
+
+    async def connect():
+        _login, client._cipher = build_login_packet(SECRET_KEY, TOKEN)
+        client._client = gatt
+        client._login_event.set()
+        return SimpleNamespace(rssi=-63)
+
+    monkeypatch.setattr(client, "_async_connect", connect)
+
+    await client.async_run_script(7)
+
+    gatt.write_gatt_char.assert_awaited_once_with(
+        WRITE_CHARACTERISTIC_UUID,
+        bytes.fromhex("05aaed14ad2b66cd"),
+        response=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_lock_model_rejects_bot_2_script_before_connecting() -> None:
+    client = status_client()
+
+    with pytest.raises(SesameConnectionError, match="not supported"):
+        await client.async_run_script(7)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("script_index", [-1, 10, True, 1.5, "1"])
+async def test_bot_2_rejects_invalid_script_before_connecting(
+    script_index, monkeypatch
+) -> None:
+    client = SesameStatusClient(
+        SimpleNamespace(),
+        17,
+        bytes.fromhex("12345678123456781234567812345678"),
+        SECRET_KEY,
+        "Test Bot 2",
+    )
+    connect = AsyncMock()
+    monkeypatch.setattr(client, "_async_connect", connect)
+
+    with pytest.raises(SesameConnectionError, match="script index"):
+        await client.async_run_script(script_index)
+
+    connect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bot_2_ack_starts_double_tap_cooldown(monkeypatch) -> None:
+    client = SesameStatusClient(
+        SimpleNamespace(),
+        17,
+        bytes.fromhex("12345678123456781234567812345678"),
+        SECRET_KEY,
+        "Test Bot 2",
+    )
+    gatt = SimpleNamespace(is_connected=False, write_gatt_char=AsyncMock())
+
+    async def acknowledge(*_args, **_kwargs) -> None:
+        client._command_result = 0
+        client._command_event.set()
+
+    gatt.write_gatt_char.side_effect = acknowledge
+
+    async def connect():
+        _login, client._cipher = build_login_packet(SECRET_KEY, TOKEN)
+        client._client = gatt
+        client._login_event.set()
+        return SimpleNamespace(rssi=-63)
+
+    monkeypatch.setattr(client, "_async_connect", connect)
+
+    await client.async_run_script(2)
+    with pytest.raises(SesameConnectionError, match="cooldown"):
+        await client.async_run_script(2)
+
+    assert gatt.write_gatt_char.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_bot_2_lost_ack_blocks_ambiguous_retry(monkeypatch) -> None:
+    client = SesameStatusClient(
+        SimpleNamespace(),
+        17,
+        bytes.fromhex("12345678123456781234567812345678"),
+        SECRET_KEY,
+        "Test Bot 2",
+    )
+    gatt = SimpleNamespace(is_connected=False, write_gatt_char=AsyncMock())
+
+    async def connect():
+        _login, client._cipher = build_login_packet(SECRET_KEY, TOKEN)
+        client._client = gatt
+        client._login_event.set()
+        return SimpleNamespace(rssi=-63)
+
+    monkeypatch.setattr(client, "_async_connect", connect)
+    monkeypatch.setattr(
+        "custom_components.candy_house_ble.client.COMMAND_TIMEOUT", 0.01
+    )
+
+    with pytest.raises(SesameConnectionError, match="indeterminate"):
+        await client.async_run_script(5)
+    with pytest.raises(SesameConnectionError, match="cooldown"):
+        await client.async_run_script(5)
+
+    gatt.write_gatt_char.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_bot_2_write_failure_is_indeterminate_and_not_retried(
+    monkeypatch,
+) -> None:
+    client = SesameStatusClient(
+        SimpleNamespace(),
+        17,
+        bytes.fromhex("12345678123456781234567812345678"),
+        SECRET_KEY,
+        "Test Bot 2",
+    )
+    gatt = SimpleNamespace(
+        is_connected=False,
+        write_gatt_char=AsyncMock(side_effect=RuntimeError("transport lost")),
+    )
+
+    async def connect():
+        _login, client._cipher = build_login_packet(SECRET_KEY, TOKEN)
+        client._client = gatt
+        client._login_event.set()
+        return SimpleNamespace(rssi=-63)
+
+    monkeypatch.setattr(client, "_async_connect", connect)
+
+    with pytest.raises(SesameConnectionError, match="indeterminate"):
+        await client.async_run_script(8)
+    with pytest.raises(SesameConnectionError, match="cooldown"):
+        await client.async_run_script(8)
+
+    gatt.write_gatt_char.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_bot_2_connect_failure_reports_no_command_sent(
+    monkeypatch,
+) -> None:
+    client = SesameStatusClient(
+        SimpleNamespace(),
+        17,
+        bytes.fromhex("12345678123456781234567812345678"),
+        SECRET_KEY,
+        "Test Bot 2",
+    )
+    connect = AsyncMock(side_effect=RuntimeError("proxy disconnected"))
+    monkeypatch.setattr(client, "_async_connect", connect)
+
+    with pytest.raises(SesameConnectionError, match="no command was sent"):
+        await client.async_run_script(7)
+    with pytest.raises(SesameConnectionError, match="no command was sent"):
+        await client.async_run_script(7)
+
+    assert connect.await_count == 2
 
 
 @pytest.mark.asyncio

@@ -17,7 +17,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import CandyHouseConfigEntry
-from .const import SESAME_5_PRO_BATTERY_DIVIDER_RATIO
+from .const import (
+    BOT_2_BATTERY_DIVIDER_RATIO,
+    CONF_MODEL,
+    MODEL_BOT_2,
+    MODEL_SESAME_5_PRO,
+    SESAME_5_PRO_BATTERY_DIVIDER_RATIO,
+)
 from .entity import CandyHouseEntity
 
 
@@ -27,18 +33,24 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up read-only SESAME sensors."""
-    async_add_entities(
-        [
+    if entry.data[CONF_MODEL] == MODEL_BOT_2:
+        entities = [
+            SesameBatteryVoltageSensor(entry),
+            SesameSignalStrengthSensor(entry),
+        ]
+    else:
+        entities = [
             SesameBatteryVoltageSensor(entry),
             SesameSignalStrengthSensor(entry),
             SesamePositionSensor(entry),
         ]
-    )
+    async_add_entities(entities)
 
 
 class SesameBatteryVoltageSensor(CandyHouseEntity, SensorEntity):
-    """Represent SESAME 5 Pro battery voltage through its 1:2 divider."""
+    """Represent the model-corrected battery voltage."""
 
+    _divider_ratio = SESAME_5_PRO_BATTERY_DIVIDER_RATIO
     _attr_device_class = SensorDeviceClass.VOLTAGE
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_native_unit_of_measurement = UnitOfElectricPotential.VOLT
@@ -48,6 +60,8 @@ class SesameBatteryVoltageSensor(CandyHouseEntity, SensorEntity):
 
     def __init__(self, entry: CandyHouseConfigEntry) -> None:
         super().__init__(entry, "battery_voltage")
+        if entry.data[CONF_MODEL] != MODEL_SESAME_5_PRO:
+            self._divider_ratio = BOT_2_BATTERY_DIVIDER_RATIO
 
     @property
     def native_value(self) -> float | None:
@@ -56,7 +70,7 @@ class SesameBatteryVoltageSensor(CandyHouseEntity, SensorEntity):
             return None
         return (
             self.coordinator.data.battery_raw
-            * SESAME_5_PRO_BATTERY_DIVIDER_RATIO
+            * self._divider_ratio
             / 1000
         )
 

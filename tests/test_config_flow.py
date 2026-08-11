@@ -28,6 +28,8 @@ from custom_components.candy_house_ble.const import (
     CONF_MODEL,
     CONF_QR_IMAGE,
     CONF_SECRET_KEY,
+    MODEL_BOT_2,
+    MODEL_SESAME_5_PRO,
 )
 from custom_components.candy_house_ble.qr import (
     ManagerCredentialRequired,
@@ -59,10 +61,13 @@ def flow_with_fake_hass() -> CandyHouseBLEConfigFlow:
 
 def options_flow(
     options: dict[str, object] | None = None,
+    *,
+    model: int = MODEL_SESAME_5_PRO,
 ) -> CandyHouseBLEOptionsFlow:
     """Build an options flow attached to a synthetic config entry."""
     entry = SimpleNamespace(
-        data={CONF_DEVICE_ID: str(DEVICE_UUID)}, options=options or {}
+        data={CONF_DEVICE_ID: str(DEVICE_UUID), CONF_MODEL: model},
+        options=options or {},
     )
     flow = CandyHouseBLEOptionsFlow()
     flow.hass = FakeHass(entry)
@@ -116,6 +121,39 @@ async def test_create_entry_stores_parsed_credential_without_address(
     }
     assert "address" not in result["data"]
     flow.async_set_unique_id.assert_awaited_once_with(str(DEVICE_UUID))
+
+
+@pytest.mark.asyncio
+async def test_create_bot_2_entry_uses_model_17(monkeypatch) -> None:
+    credential = SesameCredential(
+        model=MODEL_BOT_2,
+        name="Test Bot 2",
+        level=1,
+        secret_key=SECRET_KEY,
+        device_id=DEVICE_UUID.bytes,
+    )
+    monkeypatch.setattr(
+        "custom_components.candy_house_ble.config_flow._decode_uploaded_file",
+        lambda _hass, _file_id: credential,
+    )
+    monkeypatch.setattr(
+        "custom_components.candy_house_ble.config_flow."
+        "async_resolve_service_info",
+        AsyncMock(return_value=SimpleNamespace(device=object())),
+    )
+    flow = flow_with_fake_hass()
+    flow.async_set_unique_id = AsyncMock()
+    flow._abort_if_unique_id_configured = lambda: None
+
+    result = await flow.async_step_user({CONF_QR_IMAGE: "temporary-file-id"})
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Test Bot 2"
+    assert result["data"] == {
+        CONF_DEVICE_ID: str(DEVICE_UUID),
+        CONF_MODEL: MODEL_BOT_2,
+        CONF_SECRET_KEY: SECRET_KEY.hex(),
+    }
 
 
 @pytest.mark.asyncio
@@ -187,6 +225,39 @@ async def test_options_default_to_local_ble() -> None:
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
+
+
+@pytest.mark.asyncio
+async def test_bot_2_has_no_command_transport_options() -> None:
+    result = await options_flow(model=MODEL_BOT_2).async_step_init()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "options_not_supported"
+
+
+@pytest.mark.asyncio
+async def test_bot_2_direct_cloud_step_is_also_rejected(
+    monkeypatch,
+) -> None:
+    flow = options_flow(model=MODEL_BOT_2)
+    constructor = Mock(side_effect=AssertionError("cloud client constructed"))
+    monkeypatch.setattr(
+        "custom_components.candy_house_ble.config_flow."
+        "SesameCloudCommandClient",
+        constructor,
+    )
+
+    result = await flow.async_step_cloud(
+        {
+            CONF_CLOUD_API_KEY: "must-not-be-used",
+            CONF_CLOUD_SECRET_KEY: "11" * 16,
+            CONF_CLOUD_UNLOCK_ENABLED: True,
+        }
+    )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "options_not_supported"
+    constructor.assert_not_called()
 
 
 @pytest.mark.asyncio

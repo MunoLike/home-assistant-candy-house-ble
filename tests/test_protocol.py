@@ -8,6 +8,8 @@ from cryptography.hazmat.primitives.ciphers import algorithms
 from cryptography.hazmat.primitives.ciphers.aead import AESCCM
 
 from custom_components.candy_house_ble.protocol import (
+    BOT_2_RUN_SCRIPT_ITEM_BASE,
+    BOT_2_SCRIPT_COUNT,
     ITEM_LOCK,
     ITEM_LOGIN,
     ITEM_MECH_STATUS,
@@ -19,9 +21,11 @@ from custom_components.candy_house_ble.protocol import (
     LockState,
     ProtocolError,
     SegmentReceiver,
+    build_bot_2_run_script_packet,
     build_lock_packet,
     build_login_packet,
     build_unlock_packet,
+    parse_bot_2_mechanism_status,
     parse_mechanism_status,
     parse_notification,
 )
@@ -85,6 +89,41 @@ def test_outbound_counter_advances_independently() -> None:
     assert second.hex() == "0501f54997b9c40a"
 
 
+@pytest.mark.parametrize(
+    ("script_index", "expected_packet"),
+    [
+        (0, "05b1ed14f834d8ad"),
+        (1, "05b0ed14b3665581"),
+        (2, "05b7ed14d1e57e63"),
+        (3, "05b6ed148d810eb6"),
+        (4, "05b5ed145f76585e"),
+        (5, "05b4ed1456643077"),
+        (6, "05abed148c099cf3"),
+        (7, "05aaed14ad2b66cd"),
+        (8, "05a9ed14d672bdfa"),
+        (9, "05a8ed14a0b59e21"),
+    ],
+)
+def test_build_fixed_bot_2_script_packets(
+    script_index: int, expected_packet: str
+) -> None:
+    _login, cipher = build_login_packet(SECRET_KEY, TOKEN)
+
+    packet = build_bot_2_run_script_packet(cipher, script_index)
+
+    assert BOT_2_RUN_SCRIPT_ITEM_BASE == 170
+    assert BOT_2_SCRIPT_COUNT == 10
+    assert packet.hex() == expected_packet
+
+
+@pytest.mark.parametrize("script_index", [-1, 10, True, 1.5, "1"])
+def test_bot_2_script_packet_rejects_invalid_index(script_index) -> None:
+    _login, cipher = build_login_packet(SECRET_KEY, TOKEN)
+
+    with pytest.raises(ProtocolError, match="script index"):
+        build_bot_2_run_script_packet(cipher, script_index)
+
+
 def test_parse_encrypted_mechanism_notification() -> None:
     mechanism = (
         (5000).to_bytes(2, "little")
@@ -121,6 +160,55 @@ def test_parse_plain_response() -> None:
 
     assert notification.result_code == 0
     assert notification.payload == b"ok"
+
+
+@pytest.mark.parametrize(
+    ("flags", "state", "stopped"),
+    [
+        (0b00000010, LockState.LOCKED, False),
+        (0b00000100, LockState.UNLOCKED, True),
+        (0b00000110, LockState.LOCKED, True),
+        (0, LockState.UNLOCKED, False),
+    ],
+)
+def test_parse_bot_2_status(
+    flags: int, state: LockState, stopped: bool
+) -> None:
+    status = parse_bot_2_mechanism_status(
+        (3012).to_bytes(2, "little") + bytes((flags,))
+    )
+
+    assert status.state is state
+    assert status.battery_raw == 3012
+    assert status.target is None
+    assert status.position is None
+    assert status.battery_low is None
+    assert status.critical is None
+    assert status.stopped is stopped
+
+
+def test_bot_2_accepts_official_seven_byte_compatibility_status() -> None:
+    payload = (
+        (5000).to_bytes(2, "little")
+        + (-32768).to_bytes(2, "little", signed=True)
+        + (-123).to_bytes(2, "little", signed=True)
+        + bytes((0b00010010,))
+    )
+
+    status = parse_bot_2_mechanism_status(payload)
+
+    assert status.battery_raw == 5000
+    assert status.state is LockState.LOCKED
+    assert status.position == -123
+    assert status.stopped is True
+
+
+@pytest.mark.parametrize(
+    "payload", [b"", b"\x01\x02", bytes(4), bytes(6), bytes(8)]
+)
+def test_reject_invalid_bot_2_status(payload: bytes) -> None:
+    with pytest.raises(ProtocolError, match="Bot 2"):
+        parse_bot_2_mechanism_status(payload)
 
 
 @pytest.mark.parametrize(

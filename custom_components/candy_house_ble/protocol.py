@@ -1,7 +1,7 @@
 """Constrained CANDY HOUSE SESAME OS3 protocol helpers.
 
-Only login, lock, and unlock packets can be built. There is deliberately no
-generic encrypted-command builder.
+Only login, lock, unlock, and the ten fixed Bot 2 script packets can be built.
+There is deliberately no generic encrypted-command builder.
 """
 
 from __future__ import annotations
@@ -25,6 +25,11 @@ ITEM_MECH_STATUS = 81
 ITEM_LOCK = 82
 ITEM_UNLOCK = 83
 
+# Official Android SDK commit 436249f77f21302aa69956bfe487d2670b997e9f
+# maps Bot 2 script slots 0..9 to item codes 170..179.
+BOT_2_RUN_SCRIPT_ITEM_BASE = 170
+BOT_2_SCRIPT_COUNT = 10
+
 HISTORY_TAG_ANDROID_USER_BLE = bytes((0, 14))
 
 
@@ -42,14 +47,14 @@ class LockState(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class MechanismStatus:
-    """Parsed SESAME 5 mechanism status."""
+    """Parsed mechanism status shared by supported OS3 devices."""
 
     state: LockState
     battery_raw: int
     target: int | None
-    position: int
-    battery_low: bool
-    critical: bool
+    position: int | None
+    battery_low: bool | None
+    critical: bool | None
     stopped: bool
     rssi: int | None = None
 
@@ -156,6 +161,22 @@ def build_unlock_packet(cipher: SesameSessionCipher) -> bytes:
     return bytes(((SEGMENT_CIPHER << 1) | 1,)) + cipher.encrypt(plaintext)
 
 
+def bot_2_run_script_item_code(script_index: int) -> int:
+    """Return the allowlisted Bot 2 item code for a script slot."""
+    if type(script_index) is not int or not 0 <= script_index < BOT_2_SCRIPT_COUNT:
+        raise ProtocolError("Invalid SESAME Bot 2 script index")
+    return BOT_2_RUN_SCRIPT_ITEM_BASE + script_index
+
+
+def build_bot_2_run_script_packet(
+    cipher: SesameSessionCipher, script_index: int
+) -> bytes:
+    """Build one allowlisted SESAME Bot 2 script packet."""
+    item_code = bot_2_run_script_item_code(script_index)
+    plaintext = bytes((item_code,)) + HISTORY_TAG_ANDROID_USER_BLE
+    return bytes(((SEGMENT_CIPHER << 1) | 1,)) + cipher.encrypt(plaintext)
+
+
 def parse_notification(
     segment_type: int, payload: bytes, cipher: SesameSessionCipher | None
 ) -> Notification:
@@ -207,4 +228,27 @@ def parse_mechanism_status(payload: bytes) -> MechanismStatus:
         battery_low=bool(flags & 0b00100000),
         critical=bool(flags & 0b00001000),
         stopped=bool(flags & 0b00010000),
+    )
+
+
+def parse_bot_2_mechanism_status(payload: bytes) -> MechanismStatus:
+    """Parse the official three-byte SESAME Bot 2 mechanism status."""
+    if len(payload) == 7:
+        return parse_mechanism_status(payload)
+    if len(payload) != 3:
+        raise ProtocolError("Invalid SESAME Bot 2 mechanism status")
+
+    flags = payload[2]
+    return MechanismStatus(
+        state=(
+            LockState.LOCKED
+            if flags & 0b00000010
+            else LockState.UNLOCKED
+        ),
+        battery_raw=int.from_bytes(payload[0:2], "little"),
+        target=None,
+        position=None,
+        battery_low=None,
+        critical=None,
+        stopped=bool(flags & 0b00000100),
     )

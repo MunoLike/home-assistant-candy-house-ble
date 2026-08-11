@@ -43,6 +43,9 @@
         },
         "title": "コマンド経路"
       }
+    },
+    "abort": {
+      "options_not_supported": "このデバイスには設定可能な操作経路がありません"
     }
   },
   "selector": {
@@ -54,6 +57,11 @@
     }
   },
   "entity": {
+    "button": {
+      "run_script": {
+        "name": "台本 {index} を実行"
+      }
+    },
     "binary_sensor": {
       "battery_low": {
         "name": "電池残量低下"

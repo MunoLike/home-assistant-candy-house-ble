@@ -14,9 +14,13 @@ from bleak_retry_connector import BleakClientWithServiceCache, establish_connect
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    BOT_2_COMMAND_COOLDOWN,
+    BOT_2_INDETERMINATE_COOLDOWN,
     COMMAND_COMPLETION_TIMEOUT,
     COMMAND_TIMEOUT,
     CONNECT_TIMEOUT,
+    MODEL_BOT_2,
+    MODEL_SESAME_5_PRO,
     NOTIFY_CHARACTERISTIC_UUID,
     STATUS_TIMEOUT,
     WRITE_CHARACTERISTIC_UUID,
@@ -35,9 +39,12 @@ from .protocol import (
     ProtocolError,
     SegmentReceiver,
     SesameSessionCipher,
+    bot_2_run_script_item_code,
+    build_bot_2_run_script_packet,
     build_lock_packet,
     build_login_packet,
     build_unlock_packet,
+    parse_bot_2_mechanism_status,
     parse_mechanism_status,
     parse_notification,
 )
@@ -98,6 +105,7 @@ class SesameStatusClient:
         self._poll_preempted = False
         self._poll_preempt_event = asyncio.Event()
         self._session_generation = 0
+        self._bot_command_blocked_until = 0.0
 
     async def async_read_status(self) -> MechanismStatus:
         """Fetch one authenticated mechanism status through HA Bluetooth."""
@@ -116,15 +124,49 @@ class SesameStatusClient:
 
     async def async_lock(self) -> MechanismStatus:
         """Send the fixed SESAME lock command."""
+        self._require_lock_model()
         return await self._async_actuate(
             ITEM_LOCK, build_lock_packet, LockState.LOCKED
         )
 
     async def async_unlock(self) -> MechanismStatus:
         """Send the fixed SESAME unlock command."""
+        self._require_lock_model()
         return await self._async_actuate(
             ITEM_UNLOCK, build_unlock_packet, LockState.UNLOCKED
         )
+
+    async def async_run_script(self, script_index: int) -> None:
+        """Run one allowlisted Bot 2 on-device script slot once."""
+        if self._model != MODEL_BOT_2:
+            raise SesameConnectionError(
+                "Bot 2 scripts are not supported for this device"
+            )
+        try:
+            item_code = bot_2_run_script_item_code(script_index)
+        except ProtocolError as err:
+            raise SesameConnectionError(str(err)) from err
+        if monotonic() < self._bot_command_blocked_until:
+            raise SesameConnectionError(
+                "Bot 2 command cooldown is active; do not retry yet"
+            )
+        if self._actuation_lock.locked():
+            raise SesameConnectionError(
+                "Another SESAME operation is already in progress"
+            )
+        async with self._actuation_lock:
+            self._preempt_poll()
+            async with self._operation_lock:
+                await self._async_execute_acknowledged_bot_script(
+                    script_index, item_code
+                )
+
+    def _require_lock_model(self) -> None:
+        """Prevent non-lock devices from reaching physical commands."""
+        if self._model != MODEL_SESAME_5_PRO:
+            raise SesameConnectionError(
+                "Physical lock commands are not supported for this device"
+            )
 
     @asynccontextmanager
     async def async_external_command(self) -> AsyncIterator[None]:
@@ -316,6 +358,90 @@ class SesameStatusClient:
         finally:
             await self._async_disconnect()
 
+    async def _async_execute_acknowledged_bot_script(
+        self, script_index: int, item_code: int
+    ) -> None:
+        """Execute one fixed Bot 2 script and wait only for its response."""
+        wrote_command = False
+        try:
+            await self._async_connect()
+            async with asyncio.timeout(STATUS_TIMEOUT):
+                await self._login_event.wait()
+            if self._notification_error is not None:
+                raise self._notification_error
+            if self._cipher is None or self._client is None:
+                raise SesameConnectionError(
+                    "Bot 2 disconnected before command authentication"
+                )
+
+            self._expected_command_item = item_code
+            self._command_result = None
+            self._command_event.clear()
+            packet = build_bot_2_run_script_packet(
+                self._cipher, script_index
+            )
+            # A transport failure cannot prove whether the peripheral received
+            # a write, so delivery becomes indeterminate before awaiting it.
+            wrote_command = True
+            await self._client.write_gatt_char(
+                WRITE_CHARACTERISTIC_UUID, packet, response=False
+            )
+            async with asyncio.timeout(COMMAND_TIMEOUT):
+                await self._command_event.wait()
+            if self._notification_error is not None:
+                raise self._notification_error
+            if self._command_result is None:
+                raise SesameConnectionError(
+                    "Bot 2 disconnected before acknowledging script"
+                )
+            if self._command_result != 0:
+                raise SesameConnectionError(
+                    "Bot 2 rejected script with result "
+                    f"{self._command_result}"
+                )
+            self._bot_command_blocked_until = max(
+                self._bot_command_blocked_until,
+                monotonic() + BOT_2_COMMAND_COOLDOWN,
+            )
+        except TimeoutError as err:
+            if wrote_command:
+                self._block_indeterminate_bot_retry()
+                raise SesameConnectionError(
+                    "Bot 2 script may have executed but acknowledgement was "
+                    "not observed; outcome is indeterminate"
+                ) from err
+            raise SesameConnectionError(
+                "Timed out waiting for Bot 2 script authentication"
+            ) from err
+        except SesameConnectionError as err:
+            if wrote_command and self._command_result is None:
+                self._block_indeterminate_bot_retry()
+                raise SesameConnectionError(
+                    "Bot 2 script may have executed but acknowledgement was "
+                    "not observed; outcome is indeterminate"
+                ) from err
+            raise
+        except Exception as err:
+            if wrote_command:
+                self._block_indeterminate_bot_retry()
+                raise SesameConnectionError(
+                    "Bot 2 script may have executed but delivery could not be "
+                    "confirmed; outcome is indeterminate"
+                ) from err
+            raise SesameConnectionError(
+                "Unable to connect to Bot 2 before sending script; no command "
+                "was sent"
+            ) from err
+        finally:
+            await self._async_disconnect()
+
+    def _block_indeterminate_bot_retry(self) -> None:
+        """Prevent an immediate duplicate after ambiguous delivery."""
+        self._bot_command_blocked_until = max(
+            self._bot_command_blocked_until,
+            monotonic() + BOT_2_INDETERMINATE_COOLDOWN,
+        )
+
     async def _async_connect(self):
         """Resolve, connect, and subscribe to one SESAME session."""
         service_info = await async_resolve_service_info(
@@ -383,6 +509,14 @@ class SesameStatusClient:
                     return
                 segment_type, payload = completed
                 notification = parse_notification(segment_type, payload, self._cipher)
+                _LOGGER.debug(
+                    "SESAME notification model=%d opcode=%d item=%d "
+                    "payload_length=%d",
+                    self._model,
+                    notification.opcode,
+                    notification.item_code,
+                    len(notification.payload),
+                )
 
                 if (
                     notification.opcode == OP_PUBLISH
@@ -423,7 +557,11 @@ class SesameStatusClient:
                     notification.opcode == OP_PUBLISH
                     and notification.item_code == ITEM_MECH_STATUS
                 ):
-                    self._status = parse_mechanism_status(notification.payload)
+                    self._status = (
+                        parse_bot_2_mechanism_status(notification.payload)
+                        if self._model == MODEL_BOT_2
+                        else parse_mechanism_status(notification.payload)
+                    )
                     self._status_event.set()
                     self._status_queue.put_nowait(self._status)
             except Exception as err:

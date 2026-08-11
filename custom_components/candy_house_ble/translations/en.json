@@ -43,6 +43,9 @@
         },
         "title": "Command transport"
       }
+    },
+    "abort": {
+      "options_not_supported": "This device has no configurable command transport"
     }
   },
   "selector": {
@@ -54,6 +57,11 @@
     }
   },
   "entity": {
+    "button": {
+      "run_script": {
+        "name": "Run script {index}"
+      }
+    },
     "binary_sensor": {
       "battery_low": {
         "name": "Battery low"

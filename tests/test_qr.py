@@ -56,6 +56,17 @@ def test_parse_manager_share_uri() -> None:
     validate_manager_credential(credential)
 
 
+def test_parse_bot_2_manager_share_uri() -> None:
+    credential = parse_share_uri(build_uri(model=17, name="Test Bot 2"))
+
+    assert credential.model == 17
+    assert credential.name == "Test Bot 2"
+    assert credential.level == 1
+    assert credential.secret_key == SECRET_KEY
+    assert credential.device_id == DEVICE_ID.bytes
+    validate_manager_credential(credential)
+
+
 @pytest.mark.parametrize("level", [0, 2, 3])
 def test_reject_non_manager_levels(level: int) -> None:
     credential = parse_share_uri(build_uri(level=level))
