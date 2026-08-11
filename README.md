@@ -14,22 +14,18 @@ Polling and operations each use one short BLE session. Normal polling runs every
 30 seconds; an explicit Home Assistant lock operation preempts an in-flight
 background poll instead of waiting behind its timeout.
 
-If Hub 3 is available, the integration options can instead route explicit lock
-and unlock commands through the public CANDY HOUSE Web API while keeping all
-periodic state and diagnostic polling on local BLE. This hybrid mode avoids the
-BLE connection delay seen when Hub 3 and Home Assistant compete for the same
-lock. It requires a Web API key and the separate Web API device secret; the BLE
-manager key from the setup QR is not interchangeable with that secret.
+Version 0.3.0 and later intentionally support only local BLE. Hub 3/cloud command
+transport and its options were removed so connection latency and reliability can
+be attributed to one transport. Running Hub 3 against the same SESAME at the
+same time is outside the supported configuration because it can contend for the
+device. Migrating an older config entry removes its saved Web API options; a
+downgrade to 0.2.0 requires entering those credentials again.
 
-Remote unlock is disabled by default and must be explicitly enabled in the
-integration options. A command is posted exactly once and is never retried. The
-service call succeeds when the API accepts the command and consumes one API
-request. It does not claim an unobserved target state: the entity retains its
-last local BLE state, then starts a delayed BLE refresh in the background.
-Hub 3's immediate cloud shadow proved too stale for synchronous physical-state
-confirmation. [CANDY HOUSE currently documents](https://jp.candyhouse.co/pages/sesame-biz-operation)
-a free allowance of 1,000 requests per month, so cloud mode is intentionally not
-used for periodic polling or post-command status reads.
+The Home Assistant diagnostics download includes process-local aggregate BLE
+session and operation outcomes and successful timing statistics. It contains no
+raw packets or exception messages and resets whenever the entry reloads or Core
+restarts. The observation timestamp identifies the measured interval; entity
+availability/history is the durable view across restarts.
 
 SESAME Bot 2 exposes ten buttons for directly running on-device script slots
 0 through 9. Script actions and slot meanings are edited in the official app;
@@ -48,7 +44,7 @@ default to avoid noisy Recorder history and can be enabled from the device page.
 
 ## Status
 
-Current version: **0.2.0**.
+Current version: **0.3.0**.
 SESAME 5 Pro state reporting and lock/unlock commands, and SESAME Bot 2 BLE
 status and script execution, have been physically validated by the device owner
 through the Home Assistant UI.
@@ -73,10 +69,11 @@ still points to the current `main` commit.
 - Real device credentials are never test fixtures and must not be committed.
 - Tests generate synthetic credentials and QR images at runtime.
 - The command surface is limited to lock, unlock, and Bot 2 script slots 0
-  through 9; there is no generic BLE or Web API command method and no Bot 2
+  through 9; there is no generic BLE or cloud command method and no Bot 2
   script-editing method.
-- Web API credentials are stored only in the Home Assistant config entry and
-  its backups. They are never written to this repository or logs.
+- Version 4 config-entry migration removes the Web API options formerly stored
+  by version 3. BLE manager credentials remain redacted from diagnostics and
+  are never written to repository logs or fixtures.
 
 See [the implementation plan](docs/implementation-plan.md) for acceptance
 criteria, rollback, and the staged rollout procedure.

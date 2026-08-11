@@ -50,7 +50,9 @@ async def test_version_two_migration_removes_legacy_state_entity(
         f"{DEVICE_UUID}_state",
     )
     registry.async_remove.assert_called_once_with("sensor.test_lock_state")
-    config_entries.async_update_entry.assert_called_once_with(entry, version=3)
+    config_entries.async_update_entry.assert_called_once_with(
+        entry, version=4, options={}
+    )
 
 
 @pytest.mark.asyncio
@@ -90,4 +92,52 @@ async def test_version_three_migration_removes_current_script_button(
     registry.async_remove.assert_called_once_with(
         "button.test_bot_2_run_current_script"
     )
-    config_entries.async_update_entry.assert_called_once_with(entry, version=3)
+    config_entries.async_update_entry.assert_called_once_with(
+        entry, version=4, options={}
+    )
+
+
+@pytest.mark.asyncio
+async def test_version_four_migration_removes_only_cloud_options() -> None:
+    config_entries = SimpleNamespace(async_update_entry=Mock())
+    hass = SimpleNamespace(config_entries=config_entries)
+    entry = SimpleNamespace(
+        version=3,
+        data={
+            CONF_DEVICE_ID: DEVICE_UUID,
+            CONF_MODEL: MODEL_SESAME_5_PRO,
+        },
+        options={
+            "command_transport": "cloud",
+            "cloud_api_key": "synthetic-api-key",
+            "cloud_secret_key": "11" * 16,
+            "cloud_unlock_enabled": True,
+            "future_option": "preserved",
+        },
+    )
+
+    assert await async_migrate_entry(hass, entry) is True
+
+    config_entries.async_update_entry.assert_called_once_with(
+        entry,
+        version=4,
+        options={"future_option": "preserved"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_current_version_does_not_rewrite_entry() -> None:
+    config_entries = SimpleNamespace(async_update_entry=Mock())
+    hass = SimpleNamespace(config_entries=config_entries)
+    entry = SimpleNamespace(
+        version=4,
+        data={
+            CONF_DEVICE_ID: DEVICE_UUID,
+            CONF_MODEL: MODEL_SESAME_5_PRO,
+        },
+        options={},
+    )
+
+    assert await async_migrate_entry(hass, entry) is True
+
+    config_entries.async_update_entry.assert_not_called()

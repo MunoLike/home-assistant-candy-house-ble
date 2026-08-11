@@ -138,6 +138,7 @@ async def test_bot_2_full_setup_and_unload_never_forward_lock(
         entry,
         [Platform.BUTTON, Platform.SENSOR, Platform.BINARY_SENSOR],
     )
+    entry.add_update_listener.assert_not_called()
     hass.config_entries.async_unload_platforms.assert_awaited_once_with(
         entry,
         [Platform.BUTTON, Platform.SENSOR, Platform.BINARY_SENSOR],

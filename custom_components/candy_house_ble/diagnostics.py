@@ -25,4 +25,5 @@ async def async_get_config_entry_diagnostics(
         "status": asdict(entry.runtime_data.data)
         if entry.runtime_data.data is not None
         else None,
+        "ble_runtime": entry.runtime_data.client.diagnostics_snapshot(),
     }

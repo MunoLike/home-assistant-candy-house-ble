@@ -48,3 +48,26 @@ def test_manifest_uses_final_domain_and_local_polling() -> None:
     assert manifest["name"] == "CANDY HOUSE BLE"
     assert manifest["iot_class"] == "local_polling"
     assert manifest["requirements"] == ["pyrxing==0.6.1"]
+
+
+def test_runtime_has_no_cloud_transport_implementation() -> None:
+    """Permit legacy key names only in migration, not in runtime modules."""
+    assert not (COMPONENT / "cloud.py").exists()
+    runtime_paths = [
+        COMPONENT / "client.py",
+        COMPONENT / "config_flow.py",
+        COMPONENT / "const.py",
+        COMPONENT / "coordinator.py",
+        COMPONENT / "strings.json",
+        COMPONENT / "translations" / "en.json",
+        COMPONENT / "translations" / "ja.json",
+    ]
+    source = "\n".join(
+        path.read_text(encoding="utf-8") for path in runtime_paths
+    )
+
+    assert "SesameCloud" not in source
+    assert "COMMAND_TRANSPORT_CLOUD" not in source
+    assert "app.candyhouse.co/api" not in source
+    assert "cloud_api_key" not in source
+    assert "cloud_secret_key" not in source

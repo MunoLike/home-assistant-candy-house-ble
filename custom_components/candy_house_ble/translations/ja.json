@@ -18,44 +18,6 @@
       }
     }
   },
-  "options": {
-    "error": {
-      "cannot_connect_cloud": "CANDY HOUSE Web APIへ接続できないか、クラウド用デバイス鍵を検証できませんでした。",
-      "cloud_hub_offline": "CANDY HOUSE上でHub 3がオフラインです。",
-      "invalid_cloud_auth": "CANDY HOUSE Web APIにAPIキーを拒否されました。"
-    },
-    "step": {
-      "cloud": {
-        "data": {
-          "cloud_api_key": "Web APIキー",
-          "cloud_secret_key": "Web API用デバイス鍵",
-          "cloud_unlock_enabled": "遠隔解錠を許可"
-        },
-        "description": "認証情報はHome Assistantの構成エントリに保存されます。保存時に読み取り専用のWeb APIリクエストを1回行います。遠隔解錠は明示的に有効化しない限り無効です。",
-        "title": "Hub 3コマンド経路を設定"
-      },
-      "init": {
-        "data": {
-          "command_transport": "コマンド経路"
-        },
-        "data_description": {
-          "command_transport": "どちらを選んでも状態取得はローカルBLEのままです。クラウドはHub 3経由の明示的な施錠・解錠コマンドだけに使います。"
-        },
-        "title": "コマンド経路"
-      }
-    },
-    "abort": {
-      "options_not_supported": "このデバイスには設定可能な操作経路がありません"
-    }
-  },
-  "selector": {
-    "command_transport": {
-      "options": {
-        "ble": "ローカルBluetooth",
-        "cloud": "Hub 3経由のCANDY HOUSE Web API"
-      }
-    }
-  },
   "entity": {
     "button": {
       "run_script": {

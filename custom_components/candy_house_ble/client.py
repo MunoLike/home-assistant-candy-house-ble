@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from time import monotonic
 from typing import Any
@@ -26,6 +25,7 @@ from .const import (
     WRITE_CHARACTERISTIC_UUID,
 )
 from .discovery import async_resolve_service_info
+from .metrics import BLERuntimeMetrics
 from .protocol import (
     ITEM_INITIAL,
     ITEM_LOCK,
@@ -106,38 +106,79 @@ class SesameStatusClient:
         self._poll_preempt_event = asyncio.Event()
         self._session_generation = 0
         self._bot_command_blocked_until = 0.0
+        self._metrics = BLERuntimeMetrics()
+
+    def diagnostics_snapshot(self) -> dict[str, Any]:
+        """Return aggregate, non-sensitive metrics for this runtime."""
+        return self._metrics.snapshot()
 
     async def async_read_status(self) -> MechanismStatus:
         """Fetch one authenticated mechanism status through HA Bluetooth."""
-        if self._actuation_lock.locked():
-            raise SesamePollPreempted
-        async with self._operation_lock:
+        started_at = monotonic()
+        self._metrics.operation_started("poll")
+        try:
             if self._actuation_lock.locked():
                 raise SesamePollPreempted
-            self._poll_active = True
-            self._poll_preempted = False
-            self._poll_preempt_event.clear()
-            try:
-                return await self._async_read_status_locked()
-            finally:
-                self._poll_active = False
+            async with self._operation_lock:
+                if self._actuation_lock.locked():
+                    raise SesamePollPreempted
+                self._poll_active = True
+                self._poll_preempted = False
+                self._poll_preempt_event.clear()
+                try:
+                    status = await self._async_read_status_locked()
+                finally:
+                    self._poll_active = False
+        except SesamePollPreempted:
+            self._metrics.operation_preempted("poll")
+            raise
+        except asyncio.CancelledError:
+            self._metrics.operation_cancelled("poll")
+            raise
+        except Exception as err:
+            self._metrics.operation_failed("poll", err)
+            raise
+        self._metrics.operation_succeeded("poll", monotonic() - started_at)
+        return status
 
     async def async_lock(self) -> MechanismStatus:
         """Send the fixed SESAME lock command."""
         self._require_lock_model()
-        return await self._async_actuate(
-            ITEM_LOCK, build_lock_packet, LockState.LOCKED
+        return await self._async_recorded_status_operation(
+            "lock",
+            lambda: self._async_actuate(
+                ITEM_LOCK, build_lock_packet, LockState.LOCKED
+            ),
         )
 
     async def async_unlock(self) -> MechanismStatus:
         """Send the fixed SESAME unlock command."""
         self._require_lock_model()
-        return await self._async_actuate(
-            ITEM_UNLOCK, build_unlock_packet, LockState.UNLOCKED
+        return await self._async_recorded_status_operation(
+            "unlock",
+            lambda: self._async_actuate(
+                ITEM_UNLOCK, build_unlock_packet, LockState.UNLOCKED
+            ),
         )
 
     async def async_run_script(self, script_index: int) -> None:
         """Run one allowlisted Bot 2 on-device script slot once."""
+        started_at = monotonic()
+        self._metrics.operation_started("bot_script")
+        try:
+            await self._async_run_script(script_index)
+        except asyncio.CancelledError:
+            self._metrics.operation_cancelled("bot_script")
+            raise
+        except Exception as err:
+            self._metrics.operation_failed("bot_script", err)
+            raise
+        self._metrics.operation_succeeded(
+            "bot_script", monotonic() - started_at
+        )
+
+    async def _async_run_script(self, script_index: int) -> None:
+        """Run one Bot 2 script inside the metrics boundary."""
         if self._model != MODEL_BOT_2:
             raise SesameConnectionError(
                 "Bot 2 scripts are not supported for this device"
@@ -161,24 +202,31 @@ class SesameStatusClient:
                     script_index, item_code
                 )
 
+    async def _async_recorded_status_operation(
+        self,
+        name: str,
+        operation: Callable[[], Awaitable[MechanismStatus]],
+    ) -> MechanismStatus:
+        """Record one explicit lock operation without retrying it."""
+        started_at = monotonic()
+        self._metrics.operation_started(name)
+        try:
+            status = await operation()
+        except asyncio.CancelledError:
+            self._metrics.operation_cancelled(name)
+            raise
+        except Exception as err:
+            self._metrics.operation_failed(name, err)
+            raise
+        self._metrics.operation_succeeded(name, monotonic() - started_at)
+        return status
+
     def _require_lock_model(self) -> None:
         """Prevent non-lock devices from reaching physical commands."""
         if self._model != MODEL_SESAME_5_PRO:
             raise SesameConnectionError(
                 "Physical lock commands are not supported for this device"
             )
-
-    @asynccontextmanager
-    async def async_external_command(self) -> AsyncIterator[None]:
-        """Reserve the BLE operation slot while an external command runs."""
-        if self._actuation_lock.locked():
-            raise SesameConnectionError(
-                "Another SESAME lock operation is already in progress"
-            )
-        async with self._actuation_lock:
-            self._preempt_poll()
-            async with self._operation_lock:
-                yield
 
     async def _async_actuate(
         self,
@@ -253,8 +301,12 @@ class SesameStatusClient:
                 raise SesamePollPreempted
             return await connect_task
         finally:
+            if not connect_task.done():
+                connect_task.cancel()
             preempt_task.cancel()
-            await asyncio.gather(preempt_task, return_exceptions=True)
+            await asyncio.gather(
+                connect_task, preempt_task, return_exceptions=True
+            )
 
     async def _async_execute_command(
         self,
@@ -443,6 +495,21 @@ class SesameStatusClient:
         )
 
     async def _async_connect(self):
+        """Resolve and connect while recording one session outcome."""
+        started_at = monotonic()
+        self._metrics.connection_started()
+        try:
+            service_info = await self._async_connect_untracked()
+        except asyncio.CancelledError:
+            self._metrics.connection_cancelled()
+            raise
+        except Exception as err:
+            self._metrics.connection_failed(err)
+            raise
+        self._metrics.connection_succeeded(monotonic() - started_at)
+        return service_info
+
+    async def _async_connect_untracked(self):
         """Resolve, connect, and subscribe to one SESAME session."""
         service_info = await async_resolve_service_info(
             self._hass, self._model, self._device_id

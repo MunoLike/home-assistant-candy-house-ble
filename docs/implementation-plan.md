@@ -140,6 +140,24 @@ Before restart, remove `/config/custom_components/candy_house_ble`; no running H
   tests, compilation, JSON checks, exact production sync, and `ha core check`.
   The assistant does not send a real API command or operate the physical lock.
 
+### 10. BLE-only runtime and stability diagnostics — 2026-08-11
+
+- Version 0.3.0 supersedes the optional Hub 3 transport described in milestone
+  9. Remove its client, options flow, translations, coordinator branches, and
+  stored credentials; retain the 0.2.0 tag as the rollback point.
+- Migrate version 3 entries to version 4 by deleting only the four known former
+  cloud option keys. Unknown options survive migration. Downgrading requires
+  the former Web API credentials to be entered again.
+- Make Hub 3 coexistence explicitly unsupported. BLE stability observation is
+  performed with Hub 3 removed and without a phone-held BLE connection.
+- Add process-local aggregate diagnostics for BLE connections, polls, locks,
+  unlocks, and Bot scripts. Include the observation start and successful timing
+  aggregates; exclude raw payloads, credential values, and exception messages.
+- Keep the 30-second poll interval unchanged until the BLE-only measurements
+  justify tuning it. Keep every physical command single-attempt with no retry.
+- Full design, acceptance criteria, rollback, and measurement limitations are
+  recorded in [the 0.3.0 plan](ble-only-0.3.0-plan.md).
+
 ## Red-team gate
 
 The architecture review verdict was **REVISE**. This plan incorporates its required fixes: synthetic-only repository fixtures, QR dependency as the first spike, advertisement-identity resolution, read-only-first deployment, no physical command retry, and coexistence with the prototype integration.

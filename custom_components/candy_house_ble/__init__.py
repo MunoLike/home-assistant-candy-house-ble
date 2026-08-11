@@ -19,6 +19,18 @@ from .coordinator import SesameStatusCoordinator
 LOCK_PLATFORMS = [Platform.LOCK, Platform.SENSOR, Platform.BINARY_SENSOR]
 BOT_2_PLATFORMS = [Platform.BUTTON, Platform.SENSOR, Platform.BINARY_SENSOR]
 
+# Version 3 stored these optional Hub/Web API settings. Version 4 is BLE-only,
+# so migration removes precisely these known keys while preserving unknown
+# options for forward compatibility.
+REMOVED_V3_OPTION_KEYS = frozenset(
+    {
+        "command_transport",
+        "cloud_api_key",
+        "cloud_secret_key",
+        "cloud_unlock_enabled",
+    }
+)
+
 type CandyHouseConfigEntry = ConfigEntry[SesameStatusCoordinator]
 
 
@@ -55,16 +67,18 @@ async def async_migrate_entry(
         )
         if entity_id is not None:
             registry.async_remove(entity_id)
-    if entry.version < 3:
-        hass.config_entries.async_update_entry(entry, version=3)
+    if entry.version < 4:
+        options = {
+            key: value
+            for key, value in getattr(entry, "options", {}).items()
+            if key not in REMOVED_V3_OPTION_KEYS
+        }
+        hass.config_entries.async_update_entry(
+            entry,
+            version=4,
+            options=options,
+        )
     return True
-
-
-async def _async_reload_entry(
-    hass: HomeAssistant, entry: CandyHouseConfigEntry
-) -> None:
-    """Reload the integration when command transport options change."""
-    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_setup_entry(
@@ -77,7 +91,6 @@ async def async_setup_entry(
     else:
         await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
-    entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     await hass.config_entries.async_forward_entry_setups(
         entry, platforms_for_model(entry.data[CONF_MODEL])
     )
