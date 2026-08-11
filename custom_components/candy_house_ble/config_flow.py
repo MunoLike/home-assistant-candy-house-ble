@@ -13,13 +13,19 @@ from homeassistant.helpers.selector import (
     FileSelector,
     FileSelectorConfig,
 )
+from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from .const import (
     CONF_DEVICE_ID,
     CONF_MODEL,
     CONF_QR_IMAGE,
+    CONF_REMOTES,
     CONF_SECRET_KEY,
     DOMAIN,
+    FAKE_SESAME_MDNS_KIND,
+    FAKE_SESAME_MDNS_TYPE,
+    FAKE_SESAME_PROTOCOL_VERSION,
+    MODEL_FAKE_SESAME_BUTTON,
 )
 from .discovery import async_resolve_service_info
 from .qr import (
@@ -40,7 +46,37 @@ def _decode_uploaded_file(
 class CandyHouseBLEConfigFlow(ConfigFlow, domain=DOMAIN):
     """Configure a local CANDY HOUSE BLE device."""
 
-    VERSION = 4
+    VERSION = 5
+
+    async def async_step_zeroconf(
+        self, discovery_info: ZeroconfServiceInfo
+    ) -> ConfigFlowResult:
+        """Create a secret-free entry for a discovered Fake SESAME bridge."""
+        properties = discovery_info.properties
+        if (
+            discovery_info.type != FAKE_SESAME_MDNS_TYPE
+            or properties.get("kind") != FAKE_SESAME_MDNS_KIND
+            or properties.get("version") != FAKE_SESAME_PROTOCOL_VERSION
+        ):
+            return self.async_abort(reason="unsupported_discovery")
+
+        try:
+            device_id = str(uuid.UUID(str(properties[CONF_DEVICE_ID])))
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return self.async_abort(reason="invalid_discovery")
+
+        await self.async_set_unique_id(device_id)
+        self._abort_if_unique_id_configured()
+
+        title = str(properties.get("name") or "Fake SESAME Button Bridge")
+        return self.async_create_entry(
+            title=title,
+            data={
+                CONF_DEVICE_ID: device_id,
+                CONF_MODEL: MODEL_FAKE_SESAME_BUTTON,
+                CONF_REMOTES: [],
+            },
+        )
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None

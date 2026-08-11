@@ -12,6 +12,7 @@ from custom_components.candy_house_ble import async_migrate_entry
 from custom_components.candy_house_ble.const import (
     CONF_DEVICE_ID,
     CONF_MODEL,
+    CONF_REMOTES,
     DOMAIN,
     MODEL_BOT_2,
     MODEL_SESAME_5_PRO,
@@ -51,7 +52,7 @@ async def test_version_two_migration_removes_legacy_state_entity(
     )
     registry.async_remove.assert_called_once_with("sensor.test_lock_state")
     config_entries.async_update_entry.assert_called_once_with(
-        entry, version=4, options={}
+        entry, version=5, data=entry.data, options={}
     )
 
 
@@ -93,7 +94,7 @@ async def test_version_three_migration_removes_current_script_button(
         "button.test_bot_2_run_current_script"
     )
     config_entries.async_update_entry.assert_called_once_with(
-        entry, version=4, options={}
+        entry, version=5, data=entry.data, options={}
     )
 
 
@@ -120,8 +121,48 @@ async def test_version_four_migration_removes_only_cloud_options() -> None:
 
     config_entries.async_update_entry.assert_called_once_with(
         entry,
-        version=4,
+        version=5,
+        data=entry.data,
         options={"future_option": "preserved"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_version_five_migration_replaces_aggregate_fake_entity(
+    monkeypatch,
+) -> None:
+    registry = SimpleNamespace(
+        async_get_entity_id=Mock(return_value="event.old_aggregate"),
+        async_remove=Mock(),
+    )
+    config_entries = SimpleNamespace(async_update_entry=Mock())
+    hass = SimpleNamespace(config_entries=config_entries)
+    entry = SimpleNamespace(
+        version=4,
+        data={
+            CONF_DEVICE_ID: DEVICE_UUID,
+            CONF_MODEL: 256,
+        },
+        options={},
+    )
+    monkeypatch.setattr(
+        "custom_components.candy_house_ble.er.async_get",
+        lambda _hass: registry,
+    )
+
+    assert await async_migrate_entry(hass, entry) is True
+
+    registry.async_get_entity_id.assert_called_once_with(
+        Platform.EVENT,
+        DOMAIN,
+        f"{DEVICE_UUID}_remote_button",
+    )
+    registry.async_remove.assert_called_once_with("event.old_aggregate")
+    config_entries.async_update_entry.assert_called_once_with(
+        entry,
+        version=5,
+        data={**entry.data, CONF_REMOTES: []},
+        options={},
     )
 
 
@@ -130,7 +171,7 @@ async def test_current_version_does_not_rewrite_entry() -> None:
     config_entries = SimpleNamespace(async_update_entry=Mock())
     hass = SimpleNamespace(config_entries=config_entries)
     entry = SimpleNamespace(
-        version=4,
+        version=5,
         data={
             CONF_DEVICE_ID: DEVICE_UUID,
             CONF_MODEL: MODEL_SESAME_5_PRO,

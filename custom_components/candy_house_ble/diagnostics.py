@@ -9,7 +9,7 @@ from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
 from . import CandyHouseConfigEntry
-from .const import CONF_SECRET_KEY
+from .const import CONF_MODEL, CONF_SECRET_KEY, MODEL_FAKE_SESAME_BUTTON
 
 
 async def async_get_config_entry_diagnostics(
@@ -17,6 +17,14 @@ async def async_get_config_entry_diagnostics(
 ) -> dict[str, Any]:
     """Return diagnostics with the device secret removed."""
     del hass
+    if entry.data[CONF_MODEL] == MODEL_FAKE_SESAME_BUTTON:
+        return {
+            "config_entry": {
+                "title": entry.title,
+                "data": dict(entry.data),
+            },
+            "event_transport": "esphome_native_api",
+        }
     return {
         "config_entry": {
             "title": entry.title,

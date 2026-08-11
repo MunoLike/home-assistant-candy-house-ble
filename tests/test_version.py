@@ -21,13 +21,21 @@ def version_tree(root: Path, *, readme_line: str = README_UNRELEASED) -> Path:
     """Create a minimal repository version fixture."""
     component = root / "custom_components/candy_house_ble"
     component.mkdir(parents=True)
+    firmware = root / "firmware/components/fake_sesame"
+    firmware.mkdir(parents=True)
     (component / "manifest.json").write_text(
         json.dumps({"domain": "candy_house_ble", "version": "0.0.0"}),
         encoding="utf-8",
     )
     (root / "README.md").write_text(
-        f"# Integration\n\n## Status\n\n{readme_line}\n", encoding="utf-8"
+        "# Integration\n\n"
+        "```yaml\n"
+        "source: github://Khronos31/home-assistant-candy-house-ble@v0.0.0\n"
+        "```\n\n"
+        f"## Status\n\n{readme_line}\n",
+        encoding="utf-8",
     )
+    (firmware / "VERSION").write_text("0.0.0\n", encoding="utf-8")
     return root
 
 
@@ -41,6 +49,10 @@ def test_sync_bootstraps_first_release(tmp_path: Path) -> None:
     assert "Current version: **0.1.0**." in (root / "README.md").read_text(
         encoding="utf-8"
     )
+    assert "@v0.1.0" in (root / "README.md").read_text(encoding="utf-8")
+    assert (root / "firmware/components/fake_sesame/VERSION").read_text(
+        encoding="utf-8"
+    ) == "0.1.0\n"
 
 
 def test_sync_updates_existing_release(tmp_path: Path) -> None:

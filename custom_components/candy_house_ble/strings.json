@@ -1,7 +1,9 @@
 {
   "config": {
     "abort": {
-      "already_configured": "This CANDY HOUSE device is already configured."
+      "already_configured": "This CANDY HOUSE device is already configured.",
+      "invalid_discovery": "The discovered Fake SESAME bridge published invalid identification data.",
+      "unsupported_discovery": "The discovered service is not a supported Fake SESAME button bridge."
     },
     "error": {
       "device_not_found": "The SESAME is not currently visible through a connectable Bluetooth scanner.",
@@ -19,6 +21,11 @@
     }
   },
   "entity": {
+    "event": {
+      "remote_button": {
+        "name": "Remote button"
+      }
+    },
     "button": {
       "run_script": {
         "name": "Run script {index}"

@@ -7,7 +7,9 @@
   "config_flow": true,
   "dependencies": [
     "bluetooth",
-    "file_upload"
+    "file_upload",
+    "websocket_api",
+    "zeroconf"
   ],
   "documentation": "https://github.com/Khronos31/home-assistant-candy-house-ble",
   "integration_type": "device",
@@ -15,6 +17,9 @@
   "issue_tracker": "https://github.com/Khronos31/home-assistant-candy-house-ble/issues",
   "requirements": [
     "pyrxing==0.6.1"
+  ],
+  "zeroconf": [
+    "_candyhouseble._tcp.local."
   ],
   "version": "0.3.0"
 }

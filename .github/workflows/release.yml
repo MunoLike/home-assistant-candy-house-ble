@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RELEASE_VERSION: ${{ inputs.version }}
+      ESPHOME_VERSION: 2026.7.4
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -58,7 +59,7 @@ jobs:
           python scripts/version.py check
           unexpected="$({ git diff --name-only; git ls-files --others --exclude-standard; } \
             | sort -u \
-            | grep -Ev '^(README\.md|VERSION|custom_components/candy_house_ble/manifest\.json)$' \
+            | grep -Ev '^(README\.md|VERSION|custom_components/candy_house_ble/manifest\.json|firmware/components/fake_sesame/VERSION)$' \
             || true)"
           if [[ -n "$unexpected" ]]; then
             echo "Version synchronization changed unexpected files:" >&2
@@ -68,6 +69,19 @@ jobs:
 
       - name: Validate the release tree
         run: ./scripts/validate.sh
+
+      - name: Install the pinned ESPHome toolchain
+        run: |
+          python -m venv /tmp/candy-house-esphome
+          /tmp/candy-house-esphome/bin/python -m pip install \
+            "esphome==$ESPHOME_VERSION"
+
+      - name: Validate and compile the released ESPHome component
+        run: |
+          /tmp/candy-house-esphome/bin/esphome config \
+            firmware/examples/fake-sesame-atom-s3-lite.yaml
+          /tmp/candy-house-esphome/bin/esphome compile \
+            firmware/examples/fake-sesame-atom-s3-lite.yaml
 
       - name: Prepare or recover the release tag
         id: prepare
@@ -117,7 +131,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if ! git diff --quiet; then
             git add README.md VERSION \
-              custom_components/candy_house_ble/manifest.json
+              custom_components/candy_house_ble/manifest.json \
+              firmware/components/fake_sesame/VERSION
             git commit -m "Release $tag"
           fi
           if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then

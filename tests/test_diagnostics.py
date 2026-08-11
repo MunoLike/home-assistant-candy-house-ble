@@ -11,6 +11,7 @@ from custom_components.candy_house_ble.const import (
     CONF_DEVICE_ID,
     CONF_MODEL,
     CONF_SECRET_KEY,
+    MODEL_FAKE_SESAME_BUTTON,
     MODEL_SESAME_5_PRO,
 )
 from custom_components.candy_house_ble.diagnostics import (
@@ -61,3 +62,25 @@ async def test_diagnostics_redact_credentials_and_include_ble_metrics() -> None:
     assert "credential-value-must-not-appear" not in rendered
     assert "legacy-api-key-must-not-appear" not in rendered
     assert "legacy-cloud-secret-must-not-appear" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_fake_sesame_diagnostics_need_no_ble_runtime() -> None:
+    entry = SimpleNamespace(
+        title="Hallway buttons",
+        data={
+            CONF_DEVICE_ID: "12345678-1234-5678-1234-567812345678",
+            CONF_MODEL: MODEL_FAKE_SESAME_BUTTON,
+        },
+        runtime_data=None,
+    )
+
+    result = await async_get_config_entry_diagnostics(None, entry)
+
+    assert result == {
+        "config_entry": {
+            "title": "Hallway buttons",
+            "data": entry.data,
+        },
+        "event_transport": "esphome_native_api",
+    }

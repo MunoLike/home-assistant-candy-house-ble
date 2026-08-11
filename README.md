@@ -3,7 +3,9 @@
 Local Bluetooth integration for CANDY HOUSE SESAME devices in Home Assistant.
 
 The integration supports SESAME 5 Pro and SESAME Bot 2 through Home Assistant
-Bluetooth and ESPHome Bluetooth proxies. Setup accepts a manager share QR
+Bluetooth and ESPHome Bluetooth proxies. It also includes an ESPHome Fake
+SESAME button bridge for reusing CANDY HOUSE Remotes as Home Assistant buttons.
+Physical-device setup accepts a manager share QR
 image, decodes it inside Home Assistant, stores only the parsed credential in
 the Home Assistant config entry, and deletes the uploaded image.
 
@@ -38,6 +40,45 @@ is reported as an indeterminate outcome and applies a longer retry cooldown.
 Bot 2 diagnostic entities expose battery voltage, Bluetooth signal strength,
 and whether the motor is moving.
 
+## Fake SESAME button bridge
+
+The supplied ESPHome external component turns a dedicated ESP32-S3 into the
+minimum authenticated SESAME OS 3 peripheral needed by Remote and Remote Nano.
+It has no motor output and does not expose a lock entity.
+
+Use the same stable version as the HACS integration when importing the
+component:
+
+```yaml
+external_components:
+  - source: github://Khronos31/home-assistant-candy-house-ble@v0.3.0
+    components: [fake_sesame]
+```
+
+1. Run `python firmware/tools/stage_fake_identity.py --rotate` **once** to
+   create a synthetic identity, then build the reference layout in
+   [`firmware/examples/fake-sesame-atom-s3-lite.yaml`](firmware/examples/fake-sesame-atom-s3-lite.yaml).
+   Keep the generated UUID and secret outside the repository. Do not rotate it
+   after app/Remote pairing unless you intend to repeat that pairing.
+2. Register the synthetic lock in the official SESAME app and use the app to
+   pair one or more Remotes with it.
+3. When the flashed ESPHome node comes online, its dedicated mDNS record causes
+   Home Assistant to add a **Fake SESAME Button Bridge** device automatically
+   under CANDY HOUSE BLE. No QR upload is used for this entry.
+4. Press each paired Remote once. The integration creates a separate child
+   device and **Remote button** event entity for that physical Remote. Its event
+   types are `lock` and `unlock`; subsequent presses update only that Remote's
+   entity.
+
+Remote discovery occurs on its first authenticated press because the Fake
+SESAME cannot enumerate paired Remotes. Discovered identifiers persist across
+reloads. Unpaired Remotes must currently be removed manually from Home
+Assistant. Events are live, at-most-once notifications. A press made while
+ESPHome or its Home Assistant native API connection is offline is not replayed
+later. See the
+[product specification](docs/fake-sesame-button-product.md) for protocol,
+security boundary, acceptance criteria, and rollback.
+
 Movement is a snapshot taken at the 30-second poll, not an event detector; a
 short movement between polls can be missed. The RSSI entity is disabled by
 default to avoid noisy Recorder history and can be enabled from the device page.
@@ -45,16 +86,22 @@ default to avoid noisy Recorder history and can be enabled from the device page.
 ## Status
 
 Current version: **0.3.0**.
-SESAME 5 Pro state reporting and lock/unlock commands, and SESAME Bot 2 BLE
-status and script execution, have been physically validated by the device owner
-through the Home Assistant UI.
+SESAME 5 Pro state reporting and lock/unlock commands, SESAME Bot 2 BLE status
+and script execution, and authenticated Remote-to-Fake-SESAME press delivery
+have been physically validated by the device owner. Automatic button-device
+discovery and end-to-end delivery of both `lock` and `unlock` through the
+CANDY HOUSE BLE **Remote button** event entity have also been validated. The
+per-Remote identity and physical routing paths have been validated with both
+buttons on two Remote Nano devices.
 
 ## Releases
 
-`VERSION` is the repository source of truth. Run
-`python scripts/version.py sync X.Y.Z` to update it together with the Home
-Assistant manifest and this README, or use `python scripts/version.py check` to
-verify that all three agree.
+`VERSION` is the repository source of truth. Every stable release versions the
+HACS integration and ESPHome component together, even when only one side has
+code changes. Run `python scripts/version.py sync X.Y.Z` to update it together
+with the Home Assistant manifest, firmware component, and README references,
+or use `python scripts/version.py check` to verify that all representations
+agree.
 
 Repository owners can run the **Release** workflow from the `main` branch with
 a stable `X.Y.Z` version. It synchronizes the version, runs the same validation
@@ -74,6 +121,9 @@ still points to the current `main` commit.
 - Version 4 config-entry migration removes the Web API options formerly stored
   by version 3. BLE manager credentials remain redacted from diagnostics and
   are never written to repository logs or fixtures.
+- Fake SESAME mDNS carries only the synthetic device UUID. Home Assistant
+  button events additionally carry the physical Remote UUID and fixed action
+  name. They never carry either device's secret key.
 
 See [the implementation plan](docs/implementation-plan.md) for acceptance
 criteria, rollback, and the staged rollout procedure.

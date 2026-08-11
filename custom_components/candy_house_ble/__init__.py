@@ -10,14 +10,17 @@ from homeassistant.helpers import entity_registry as er
 from .const import (
     CONF_DEVICE_ID,
     CONF_MODEL,
+    CONF_REMOTES,
     DOMAIN,
     MODEL_BOT_2,
+    MODEL_FAKE_SESAME_BUTTON,
     MODEL_SESAME_5_PRO,
 )
 from .coordinator import SesameStatusCoordinator
 
 LOCK_PLATFORMS = [Platform.LOCK, Platform.SENSOR, Platform.BINARY_SENSOR]
 BOT_2_PLATFORMS = [Platform.BUTTON, Platform.SENSOR, Platform.BINARY_SENSOR]
+FAKE_SESAME_PLATFORMS = [Platform.EVENT]
 
 # Version 3 stored these optional Hub/Web API settings. Version 4 is BLE-only,
 # so migration removes precisely these known keys while preserving unknown
@@ -31,7 +34,15 @@ REMOVED_V3_OPTION_KEYS = frozenset(
     }
 )
 
-type CandyHouseConfigEntry = ConfigEntry[SesameStatusCoordinator]
+type CandyHouseConfigEntry = ConfigEntry[SesameStatusCoordinator | None]
+
+
+async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
+    """Register admin-only, read-only provisioning support."""
+    from .websocket_api import async_register_websocket_commands
+
+    async_register_websocket_commands(hass)
+    return True
 
 
 def platforms_for_model(model: int) -> list[Platform]:
@@ -40,6 +51,8 @@ def platforms_for_model(model: int) -> list[Platform]:
         return LOCK_PLATFORMS
     if model == MODEL_BOT_2:
         return BOT_2_PLATFORMS
+    if model == MODEL_FAKE_SESAME_BUTTON:
+        return FAKE_SESAME_PLATFORMS
     raise ValueError(f"Unsupported CANDY HOUSE model {model}")
 
 
@@ -67,15 +80,30 @@ async def async_migrate_entry(
         )
         if entity_id is not None:
             registry.async_remove(entity_id)
+    data = dict(entry.data)
+    options = dict(getattr(entry, "options", {}))
     if entry.version < 4:
         options = {
             key: value
-            for key, value in getattr(entry, "options", {}).items()
+            for key, value in options.items()
             if key not in REMOVED_V3_OPTION_KEYS
         }
+    if entry.version < 5 and entry.data[CONF_MODEL] == MODEL_FAKE_SESAME_BUTTON:
+        if registry is None:
+            registry = er.async_get(hass)
+        entity_id = registry.async_get_entity_id(
+            Platform.EVENT,
+            DOMAIN,
+            f"{entry.data[CONF_DEVICE_ID]}_remote_button",
+        )
+        if entity_id is not None:
+            registry.async_remove(entity_id)
+        data.setdefault(CONF_REMOTES, [])
+    if entry.version < 5:
         hass.config_entries.async_update_entry(
             entry,
-            version=4,
+            version=5,
+            data=data,
             options=options,
         )
     return True
@@ -85,6 +113,13 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: CandyHouseConfigEntry
 ) -> bool:
     """Set up a CANDY HOUSE BLE device from a config entry."""
+    if entry.data[CONF_MODEL] == MODEL_FAKE_SESAME_BUTTON:
+        entry.runtime_data = None
+        await hass.config_entries.async_forward_entry_setups(
+            entry, FAKE_SESAME_PLATFORMS
+        )
+        return True
+
     coordinator = SesameStatusCoordinator(hass, entry)
     if entry.data[CONF_MODEL] == MODEL_BOT_2:
         await coordinator.async_refresh()

@@ -14,6 +14,10 @@ SEMVER_PATTERN = re.compile(
 README_VERSION_PATTERN = re.compile(
     r"^Current version: \*\*(?P<version>[^*]+)\*\*\.$", re.MULTILINE
 )
+README_ESPHOME_VERSION_PATTERN = re.compile(
+    r"github://Khronos31/home-assistant-candy-house-ble@v"
+    r"(?P<version>[^\s]+)",
+)
 README_UNRELEASED = (
     "This repository is under active development and has no released version yet."
 )
@@ -33,11 +37,12 @@ def parse_version(value: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in match.groups())
 
 
-def _paths(root: Path) -> tuple[Path, Path, Path]:
+def _paths(root: Path) -> tuple[Path, Path, Path, Path]:
     return (
         root / "VERSION",
         root / "custom_components/candy_house_ble/manifest.json",
         root / "README.md",
+        root / "firmware/components/fake_sesame/VERSION",
     )
 
 
@@ -60,16 +65,28 @@ def _read_readme_version(readme: str) -> str:
     return matches[0].group("version")
 
 
+def _single_version(pattern: re.Pattern[str], text: str, label: str) -> str:
+    """Return the only version captured by one required representation."""
+    matches = list(pattern.finditer(text))
+    if len(matches) != 1:
+        raise VersionError(f"{label} must contain exactly one version")
+    return matches[0].group("version")
+
+
 def sync_version(root: Path, version: str) -> None:
     """Set every repository version field to one validated stable version."""
     parse_version(version)
-    version_path, manifest_path, readme_path = _paths(root)
+    version_path, manifest_path, readme_path, firmware_path = _paths(root)
     manifest = _load_manifest(manifest_path)
 
     try:
         readme = readme_path.read_text(encoding="utf-8")
     except OSError as err:
         raise VersionError(f"Unable to read {readme_path}: {err}") from err
+    try:
+        firmware_version = firmware_path.read_text(encoding="utf-8").strip()
+    except OSError as err:
+        raise VersionError(f"Unable to read {firmware_path}: {err}") from err
 
     release_line = f"Current version: **{version}**."
     matches = list(README_VERSION_PATTERN.finditer(readme))
@@ -84,17 +101,28 @@ def sync_version(root: Path, version: str) -> None:
             "single unreleased bootstrap sentence"
         )
 
+    _single_version(
+        README_ESPHOME_VERSION_PATTERN, readme, "README ESPHome source"
+    )
+    updated_readme = README_ESPHOME_VERSION_PATTERN.sub(
+        lambda match: match.group(0).replace(match.group("version"), version),
+        updated_readme,
+        count=1,
+    )
+    parse_version(firmware_version)
+
     manifest["version"] = version
     version_path.write_text(f"{version}\n", encoding="utf-8")
     manifest_path.write_text(
         f"{json.dumps(manifest, indent=2, ensure_ascii=False)}\n", encoding="utf-8"
     )
     readme_path.write_text(updated_readme, encoding="utf-8")
+    firmware_path.write_text(f"{version}\n", encoding="utf-8")
 
 
 def check_versions(root: Path) -> str:
     """Return the canonical version after verifying every representation."""
-    version_path, manifest_path, readme_path = _paths(root)
+    version_path, manifest_path, readme_path, firmware_path = _paths(root)
     try:
         version = version_path.read_text(encoding="utf-8").strip()
     except OSError as err:
@@ -103,16 +131,27 @@ def check_versions(root: Path) -> str:
 
     manifest_version = _load_manifest(manifest_path)["version"]
     try:
-        readme_version = _read_readme_version(
-            readme_path.read_text(encoding="utf-8")
+        readme = readme_path.read_text(encoding="utf-8")
+        readme_version = _read_readme_version(readme)
+        esphome_source_version = _single_version(
+            README_ESPHOME_VERSION_PATTERN,
+            readme,
+            "README ESPHome source",
         )
     except OSError as err:
         raise VersionError(f"Unable to read {readme_path}: {err}") from err
+    try:
+        firmware_version = firmware_path.read_text(encoding="utf-8").strip()
+    except OSError as err:
+        raise VersionError(f"Unable to read {firmware_path}: {err}") from err
+    parse_version(firmware_version)
 
     versions = {
         "VERSION": version,
         "manifest.json": manifest_version,
         "README.md": readme_version,
+        "README ESPHome source": esphome_source_version,
+        "firmware component": firmware_version,
     }
     if any(candidate != version for candidate in versions.values()):
         details = ", ".join(f"{name}={value}" for name, value in versions.items())

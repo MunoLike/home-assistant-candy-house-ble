@@ -1,0 +1,58 @@
+substitutions:
+  fake_sesame_device_id: "000102030405060708090a0b0c0d0e0f"
+  fake_sesame_secret_key: "00112233445566778899aabbccddeeff"
+
+esphome:
+  name: fake-sesame-reference
+  friendly_name: Fake SESAME Reference
+
+esp32:
+  board: m5stack-atoms3
+  framework:
+    type: esp-idf
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [fake_sesame]
+
+logger:
+
+api:
+
+wifi:
+  ssid: compile-only
+  password: compile-only
+
+mdns:
+  services:
+    - service: _candyhouseble
+      protocol: _tcp
+      port: 6053
+      txt:
+        kind: fake_sesame_button
+        version: "1"
+        device_id: ${fake_sesame_device_id}
+        name: Fake SESAME Button Bridge
+
+esp32_ble:
+  max_connections: 1
+
+fake_sesame:
+  device_id: ${fake_sesame_device_id}
+  secret_key: ${fake_sesame_secret_key}
+  on_lock:
+    - homeassistant.event:
+        event: esphome.candy_house_ble_button
+        data:
+          device_id: ${fake_sesame_device_id}
+          remote_id: !lambda return remote_id;
+          action: lock
+  on_unlock:
+    - homeassistant.event:
+        event: esphome.candy_house_ble_button
+        data:
+          device_id: ${fake_sesame_device_id}
+          remote_id: !lambda return remote_id;
+          action: unlock

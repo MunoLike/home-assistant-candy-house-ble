@@ -140,16 +140,19 @@ The target Bluetooth address is documented as:
 
 ```text
 token = AES-CMAC(key = synthetic_uuid_bytes, input = ASCII "candy")
-address = token[0:6]
-address[5] |= 0xC0
+controller_address = token[0:6]
+controller_address[5] = (controller_address[5] & 0x3F) | 0xC0
+esp_idf_address = reverse(controller_address)
 ```
 
-The documentation does not state how this six-byte array is rendered by each
-platform's address API. The first probe must compare both the raw controller
-bytes and the scanner's displayed address before Remote Nano is modified. For
-the synthetic UUID `000102030405060708090a0b0c0d0e0f`, the CMAC is
-`ae11bdb450299d5d20cb94fc449d28e0` and the post-mask six-byte array is
-`ae11bdb450e9`. This vector contains no real credential.
+CANDY HOUSE documents the controller-order derivation with the static-random
+bits at index five. ESP-IDF's `esp_bd_addr_t` instead stores the displayed
+most-significant address byte at index zero, so the six derived bytes must be
+reversed at that API boundary. For the synthetic UUID
+`000102030405060708090a0b0c0d0e0f`, the CMAC is
+`ae11bdb450299d5d20cb94fc449d28e0`, the controller-order post-mask bytes are
+`ae11bdb450e9`, and the ESP-IDF/display-order address is `e950b4bd11ae`.
+This vector contains no real credential.
 
 ## GATT surface
 
@@ -282,6 +285,17 @@ MAC setter, so this need not alter the Wi-Fi identity; whether Remote Nano's
 derived byte sequence must instead be installed as a static-random address is
 left to the scanner gate. Every raw advertisement still requires an over-air
 byte-for-byte test.
+
+The physical probe established an additional compatibility requirement not
+visible in the UUID-level SDK documentation. A SESAME 5 exposes write, notify
+and CCCD at ATT handles 13, 15 and 16, and its write characteristic advertises
+both `write` and `write-without-response`. Remote Nano did not complete login
+with Bluedroid's default operational handles 42, 44 and 45, nor with only the
+no-response property. Reserving the fake service at 11-18 produces the required
+operational handles without patching ESP-IDF globally. With both write
+properties present, Remote Nano subscribed, accepted the initial challenge,
+authenticated, sent its segmented encrypted command and produced distinct HA
+lock/unlock events.
 
 The standard BLE server and Bluetooth proxy have no compile-time mutual
 exclusion, but both share the controller, scanner/advertiser and connection

@@ -18,3 +18,20 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements-test.txt
       - run: ./scripts/validate.sh
+
+  firmware:
+    runs-on: ubuntu-latest
+    env:
+      ESPHOME_VERSION: 2026.7.4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install the pinned ESPHome toolchain
+        run: python -m pip install "esphome==$ESPHOME_VERSION"
+      - name: Validate the published firmware example
+        run: esphome config firmware/examples/fake-sesame-atom-s3-lite.yaml
+      - name: Compile the published firmware example
+        run: esphome compile firmware/examples/fake-sesame-atom-s3-lite.yaml

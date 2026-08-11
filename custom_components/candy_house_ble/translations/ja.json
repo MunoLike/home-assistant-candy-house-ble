@@ -1,7 +1,9 @@
 {
   "config": {
     "abort": {
-      "already_configured": "このCANDY HOUSEデバイスはすでに設定されています。"
+      "already_configured": "このCANDY HOUSEデバイスはすでに設定されています。",
+      "invalid_discovery": "検出したFake SESAMEブリッジの識別情報が不正です。",
+      "unsupported_discovery": "検出したサービスは対応するFake SESAMEボタンブリッジではありません。"
     },
     "error": {
       "device_not_found": "接続可能なBluetoothスキャナーからSESAMEが見つかりません。",
@@ -19,6 +21,11 @@
     }
   },
   "entity": {
+    "event": {
+      "remote_button": {
+        "name": "リモートボタン"
+      }
+    },
     "button": {
       "run_script": {
         "name": "台本 {index} を実行"
