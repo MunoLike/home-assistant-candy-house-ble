@@ -37,9 +37,23 @@ default to avoid noisy Recorder history and can be enabled from the device page.
 
 ## Status
 
-This repository is under active development and has no released version yet.
+Current version: **0.1.0**.
 SESAME 5 Pro state reporting and lock/unlock commands have been physically
 validated by the device owner through the Home Assistant UI.
+
+## Releases
+
+`VERSION` is the repository source of truth. Run
+`python scripts/version.py sync X.Y.Z` to update it together with the Home
+Assistant manifest and this README, or use `python scripts/version.py check` to
+verify that all three agree.
+
+Repository owners can run the **Release** workflow from the `main` branch with
+a stable `X.Y.Z` version. It synchronizes the version, runs the same validation
+as pull requests, atomically pushes the version commit and annotated `vX.Y.Z`
+tag, and publishes a GitHub Release with generated notes. A rerun safely
+finishes a Release that failed after its tag was pushed, provided that the tag
+still points to the current `main` commit.
 
 ## Privacy and security
 
