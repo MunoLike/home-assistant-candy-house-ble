@@ -10,13 +10,15 @@ config entry, and deletes the uploaded image.
 The primary entity is a local BLE lock supporting explicit lock and unlock
 operations. Diagnostic entities expose battery-critical state, battery voltage,
 Bluetooth signal strength, thumb-turn angle, movement, and mechanism errors.
-Polling and operations each use one short BLE session.
+Polling and operations each use one short BLE session. Normal polling runs every
+30 seconds; an explicit Home Assistant lock operation preempts an in-flight
+background poll instead of waiting behind its timeout.
 
 The original state sensor remains available during the initial lock-entity
 validation period. It is deprecated and will be removed only after local
 dashboard and automation consumers have been migrated.
 
-Movement is a snapshot taken at the 15-second poll, not an event detector; a
+Movement is a snapshot taken at the 30-second poll, not an event detector; a
 short movement between polls can be missed. The RSSI entity is disabled by
 default to avoid noisy Recorder history and can be enabled from the device page.
 

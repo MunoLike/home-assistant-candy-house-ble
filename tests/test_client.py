@@ -10,6 +10,7 @@ import pytest
 
 from custom_components.candy_house_ble.client import (
     SesameConnectionError,
+    SesamePollPreempted,
     SesameStatusClient,
     service_info_rssi,
 )
@@ -239,28 +240,44 @@ async def test_disconnect_after_acknowledgement_is_reported(monkeypatch) -> None
 
 
 @pytest.mark.asyncio
-async def test_poll_and_commands_share_one_operation_lock(monkeypatch) -> None:
+async def test_command_preempts_poll_without_overlapping_sessions(
+    monkeypatch,
+) -> None:
     client = status_client()
     active = 0
     maximum_active = 0
+    poll_started = asyncio.Event()
 
-    async def execute(*_args) -> None:
+    async def execute(*_args):
         nonlocal active, maximum_active
         active += 1
         maximum_active = max(maximum_active, active)
         await asyncio.sleep(0)
         active -= 1
+        return mechanism_status(LockState.UNLOCKED)
 
     async def read_status():
-        await execute()
-        return SimpleNamespace()
+        nonlocal active, maximum_active
+        active += 1
+        maximum_active = max(maximum_active, active)
+        poll_started.set()
+        await client._status_event.wait()
+        active -= 1
+        if client._poll_preempted:
+            raise SesamePollPreempted
+        return mechanism_status(LockState.LOCKED)
 
     monkeypatch.setattr(client, "_async_execute_command", execute)
     monkeypatch.setattr(client, "_async_read_status_locked", read_status)
 
-    await asyncio.gather(client.async_read_status(), client.async_unlock())
+    poll = asyncio.create_task(client.async_read_status())
+    await poll_started.wait()
+    result = await client.async_unlock()
 
     assert maximum_active == 1
+    assert result.state is LockState.UNLOCKED
+    with pytest.raises(SesamePollPreempted):
+        await poll
 
 
 @pytest.mark.asyncio

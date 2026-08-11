@@ -99,6 +99,19 @@ Before restart, remove `/config/custom_components/candy_house_ble`; no running H
 - Migration gate: retain the legacy state sensor until the new entity has passed
   that UI test and local consumers have been inventoried and migrated.
 
+### 8. BLE responsiveness hardening — 2026-08-11
+
+- Give explicit lock operations priority over background status polling. A poll
+  that is already waiting for status is ended and disconnected before the
+  command session begins; the physical command itself is never retried.
+- Relax normal polling from 15 to 30 seconds to reduce connection contention
+  with Hub 3, phones, and the selected Home Assistant Bluetooth proxy.
+- Keep the cached state only during the short poll-to-operation handoff. If the
+  operation then fails, mark coordinator data unavailable rather than presenting
+  the cached lock state as current.
+- Record phase timing for successful operations that take at least five seconds,
+  without logging credentials or packet contents.
+
 ## Red-team gate
 
 The architecture review verdict was **REVISE**. This plan incorporates its required fixes: synthetic-only repository fixtures, QR dependency as the first spike, advertisement-identity resolution, read-only-first deployment, no physical command retry, and coexistence with the prototype integration.

@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import replace
+from time import monotonic
 from typing import Any
 
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
@@ -45,6 +46,10 @@ _LOGGER = logging.getLogger(__name__)
 
 class SesameConnectionError(Exception):
     """Raised when a constrained BLE status or operation session fails."""
+
+
+class SesamePollPreempted(Exception):
+    """Raised when a UI operation supersedes a background status poll."""
 
 
 def service_info_rssi(service_info: Any) -> int | None:
@@ -88,11 +93,22 @@ class SesameStatusClient:
         self._notification_error: Exception | None = None
         self._operation_lock = asyncio.Lock()
         self._actuation_lock = asyncio.Lock()
+        self._poll_active = False
+        self._poll_preempted = False
 
     async def async_read_status(self) -> MechanismStatus:
         """Fetch one authenticated mechanism status through HA Bluetooth."""
+        if self._actuation_lock.locked():
+            raise SesamePollPreempted
         async with self._operation_lock:
-            return await self._async_read_status_locked()
+            if self._actuation_lock.locked():
+                raise SesamePollPreempted
+            self._poll_active = True
+            self._poll_preempted = False
+            try:
+                return await self._async_read_status_locked()
+            finally:
+                self._poll_active = False
 
     async def async_lock(self) -> MechanismStatus:
         """Send the fixed SESAME lock command."""
@@ -117,19 +133,28 @@ class SesameStatusClient:
             raise SesameConnectionError(
                 "Another SESAME lock operation is already in progress"
             )
-        async with self._actuation_lock, self._operation_lock:
-            return await self._async_execute_command(
-                item_code, packet_builder, desired_state
-            )
+        async with self._actuation_lock:
+            if self._poll_active:
+                self._poll_preempted = True
+                self._status_event.set()
+            async with self._operation_lock:
+                return await self._async_execute_command(
+                    item_code, packet_builder, desired_state
+                )
 
     async def _async_read_status_locked(self) -> MechanismStatus:
         """Fetch status while holding the single-connection lock."""
         try:
             service_info = await self._async_connect()
 
+            if self._poll_preempted:
+                raise SesamePollPreempted
+
             async with asyncio.timeout(STATUS_TIMEOUT):
                 await self._status_event.wait()
 
+            if self._poll_preempted:
+                raise SesamePollPreempted
             if self._notification_error is not None:
                 raise self._notification_error
             if self._status is None:
@@ -141,6 +166,8 @@ class SesameStatusClient:
             raise SesameConnectionError(
                 "Timed out waiting for SESAME status"
             ) from err
+        except SesamePollPreempted:
+            raise
         except SesameConnectionError:
             raise
         except Exception as err:
@@ -155,8 +182,10 @@ class SesameStatusClient:
         desired_state: LockState,
     ) -> MechanismStatus:
         """Execute one allowlisted command and observe its terminal state."""
+        started_at = monotonic()
         try:
             service_info = await self._async_connect()
+            connected_at = monotonic()
 
             async with asyncio.timeout(STATUS_TIMEOUT):
                 await self._login_event.wait()
@@ -189,6 +218,7 @@ class SesameStatusClient:
                 raise SesameConnectionError(
                     f"SESAME rejected command with result {self._command_result}"
                 )
+            acknowledged_at = monotonic()
 
             try:
                 async with asyncio.timeout(COMMAND_COMPLETION_TIMEOUT):
@@ -204,9 +234,29 @@ class SesameStatusClient:
                                 "SESAME reported a critical mechanism error"
                             )
                         if status.state is desired_state and status.stopped:
-                            return replace(
+                            terminal = replace(
                                 status, rssi=service_info_rssi(service_info)
                             )
+                            completed_at = monotonic()
+                            elapsed = completed_at - started_at
+                            log = (
+                                _LOGGER.warning
+                                if elapsed >= 5.0
+                                else _LOGGER.debug
+                            )
+                            log(
+                                "SESAME %s completed in %.2fs "
+                                "(connect %.2fs, acknowledge %.2fs, "
+                                "terminal %.2fs, RSSI %s, source %s)",
+                                desired_state.value,
+                                elapsed,
+                                connected_at - started_at,
+                                acknowledged_at - connected_at,
+                                completed_at - acknowledged_at,
+                                terminal.rssi,
+                                getattr(service_info, "source", "unknown"),
+                            )
+                            return terminal
                         if status.state is LockState.MOVED and status.stopped:
                             raise SesameConnectionError(
                                 "SESAME stopped outside the requested lock range"

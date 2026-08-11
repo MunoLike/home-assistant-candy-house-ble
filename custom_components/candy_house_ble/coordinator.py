@@ -11,7 +11,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .client import SesameConnectionError, SesameStatusClient
+from .client import (
+    SesameConnectionError,
+    SesamePollPreempted,
+    SesameStatusClient,
+)
 from .const import CONF_DEVICE_ID, CONF_MODEL, CONF_SECRET_KEY, POLL_INTERVAL
 from .protocol import MechanismStatus
 
@@ -40,6 +44,10 @@ class SesameStatusCoordinator(DataUpdateCoordinator[MechanismStatus]):
     async def _async_update_data(self) -> MechanismStatus:
         try:
             return await self.client.async_read_status()
+        except SesamePollPreempted:
+            if self.data is not None:
+                return self.data
+            raise UpdateFailed("Initial SESAME poll was preempted") from None
         except SesameConnectionError as err:
             raise UpdateFailed(str(err)) from err
 
@@ -58,5 +66,6 @@ class SesameStatusCoordinator(DataUpdateCoordinator[MechanismStatus]):
         try:
             status = await operation()
         except SesameConnectionError as err:
+            self.async_set_update_error(err)
             raise HomeAssistantError(str(err)) from err
         self.async_set_updated_data(status)
