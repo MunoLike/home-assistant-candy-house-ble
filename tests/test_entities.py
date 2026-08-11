@@ -26,7 +26,6 @@ from custom_components.candy_house_ble.sensor import (
     SesameBatteryVoltageSensor,
     SesamePositionSensor,
     SesameSignalStrengthSensor,
-    SesameStateSensor,
 )
 from custom_components.candy_house_ble.sensor import (
     async_setup_entry as async_setup_sensors,
@@ -100,11 +99,10 @@ async def test_platform_setup_adds_all_entities() -> None:
     await async_setup_binary_sensors(None, entry, binary_sensor_entities.extend)
     await async_setup_lock(None, entry, lock_entities.extend)
 
-    assert len(sensor_entities) == 4
+    assert len(sensor_entities) == 3
     assert len(binary_sensor_entities) == 3
     assert len(lock_entities) == 1
     assert {entity.unique_id.rsplit("_", 1)[-1] for entity in sensor_entities} == {
-        "state",
         "voltage",
         "strength",
         "position",
@@ -203,12 +201,6 @@ async def test_duplicate_entity_operation_is_rejected() -> None:
     assert entity.is_locking is True
     release.set()
     await first
-
-
-def test_legacy_state_sensor_remains_during_validation() -> None:
-    entity = SesameStateSensor(fake_entry(status(state=LockState.UNLOCKED)))
-
-    assert entity.native_value == "unlocked"
 
 
 @pytest.mark.parametrize(

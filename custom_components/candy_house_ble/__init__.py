@@ -5,12 +5,31 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
+from .const import CONF_DEVICE_ID, DOMAIN
 from .coordinator import SesameStatusCoordinator
 
 PLATFORMS = [Platform.LOCK, Platform.SENSOR, Platform.BINARY_SENSOR]
 
 type CandyHouseConfigEntry = ConfigEntry[SesameStatusCoordinator]
+
+
+async def async_migrate_entry(
+    hass: HomeAssistant, entry: CandyHouseConfigEntry
+) -> bool:
+    """Remove the superseded state sensor from version 1 entries."""
+    if entry.version < 2:
+        registry = er.async_get(hass)
+        entity_id = registry.async_get_entity_id(
+            Platform.SENSOR,
+            DOMAIN,
+            f"{entry.data[CONF_DEVICE_ID]}_state",
+        )
+        if entity_id is not None:
+            registry.async_remove(entity_id)
+        hass.config_entries.async_update_entry(entry, version=2)
+    return True
 
 
 async def _async_reload_entry(

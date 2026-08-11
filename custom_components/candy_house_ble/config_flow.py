@@ -61,7 +61,7 @@ def _decode_uploaded_file(
 class CandyHouseBLEConfigFlow(ConfigFlow, domain=DOMAIN):
     """Configure a local CANDY HOUSE BLE device."""
 
-    VERSION = 1
+    VERSION = 2
 
     @staticmethod
     @callback

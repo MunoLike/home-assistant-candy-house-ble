@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
-
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -21,7 +19,6 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import CandyHouseConfigEntry
 from .const import SESAME_5_PRO_BATTERY_DIVIDER_RATIO
 from .entity import CandyHouseEntity
-from .protocol import LockState
 
 
 async def async_setup_entry(
@@ -32,44 +29,11 @@ async def async_setup_entry(
     """Set up read-only SESAME sensors."""
     async_add_entities(
         [
-            SesameStateSensor(entry),
             SesameBatteryVoltageSensor(entry),
             SesameSignalStrengthSensor(entry),
             SesamePositionSensor(entry),
         ]
     )
-
-
-class SesameStateSensor(CandyHouseEntity, SensorEntity):
-    """Represent state during the lock-entity compatibility period."""
-
-    _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options: ClassVar[list[str]] = [state.value for state in LockState]
-    _attr_translation_key = "state"
-
-    def __init__(self, entry: CandyHouseConfigEntry) -> None:
-        super().__init__(entry, "state")
-
-    @property
-    def native_value(self) -> str | None:
-        """Return locked, unlocked, or moved."""
-        if self.coordinator.data is None:
-            return None
-        return self.coordinator.data.state.value
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return non-secret mechanism diagnostics."""
-        if self.coordinator.data is None:
-            return {}
-        status = self.coordinator.data
-        return {
-            "battery_raw": status.battery_raw,
-            "target": status.target,
-            "position": status.position,
-            "critical": status.critical,
-            "stopped": status.stopped,
-        }
 
 
 class SesameBatteryVoltageSensor(CandyHouseEntity, SensorEntity):

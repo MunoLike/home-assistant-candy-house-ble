@@ -31,10 +31,6 @@ confirmation. [CANDY HOUSE currently documents](https://jp.candyhouse.co/pages/s
 a free allowance of 1,000 requests per month, so cloud mode is intentionally not
 used for periodic polling or post-command status reads.
 
-The original state sensor remains available during the initial lock-entity
-validation period. It is deprecated and will be removed only after local
-dashboard and automation consumers have been migrated.
-
 Movement is a snapshot taken at the 30-second poll, not an event detector; a
 short movement between polls can be missed. The RSSI entity is disabled by
 default to avoid noisy Recorder history and can be enabled from the device page.
@@ -42,8 +38,8 @@ default to avoid noisy Recorder history and can be enabled from the device page.
 ## Status
 
 This repository is under active development and has no released version yet.
-Lock and unlock commands are implemented but still require physical validation
-by the device owner through the Home Assistant UI.
+SESAME 5 Pro state reporting and lock/unlock commands have been physically
+validated by the device owner through the Home Assistant UI.
 
 ## Privacy and security
 

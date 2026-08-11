@@ -74,14 +74,6 @@
       },
       "signal_strength": {
         "name": "信号強度"
-      },
-      "state": {
-        "name": "状態",
-        "state": {
-          "locked": "施錠",
-          "moved": "中間位置",
-          "unlocked": "解錠"
-        }
       }
     }
   }

@@ -94,10 +94,11 @@ Before restart, remove `/config/custom_components/candy_house_ble`; no running H
   generic encrypted-command API. The assistant does not perform physical
   lock/unlock testing; the device owner tests from the Home Assistant UI after
   a separately approved Core restart.
-- Remaining runtime risk: BLE firmware response and physical actuation remain
-  unverified until that owner-run UI test.
-- Migration gate: retain the legacy state sensor until the new entity has passed
-  that UI test and local consumers have been inventoried and migrated.
+- Runtime validation was completed by the device owner through the HA UI. It
+  later motivated the optional Hub 3 command path while retaining BLE state.
+- Migration completed on 2026-08-11: after UI validation and a YAML consumer
+  inventory, version 2 removes the superseded state sensor and its entity-registry
+  entry. The lock entity and diagnostic sensors remain.
 
 ### 8. BLE responsiveness hardening — 2026-08-11
 
