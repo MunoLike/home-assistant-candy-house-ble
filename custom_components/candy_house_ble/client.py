@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from time import monotonic
 from typing import Any
@@ -125,6 +126,18 @@ class SesameStatusClient:
             ITEM_UNLOCK, build_unlock_packet, LockState.UNLOCKED
         )
 
+    @asynccontextmanager
+    async def async_external_command(self) -> AsyncIterator[None]:
+        """Reserve the BLE operation slot while an external command runs."""
+        if self._actuation_lock.locked():
+            raise SesameConnectionError(
+                "Another SESAME lock operation is already in progress"
+            )
+        async with self._actuation_lock:
+            self._preempt_poll()
+            async with self._operation_lock:
+                yield
+
     async def _async_actuate(
         self,
         item_code: int,
@@ -137,14 +150,18 @@ class SesameStatusClient:
                 "Another SESAME lock operation is already in progress"
             )
         async with self._actuation_lock:
-            if self._poll_active:
-                self._poll_preempted = True
-                self._poll_preempt_event.set()
-                self._status_event.set()
+            self._preempt_poll()
             async with self._operation_lock:
                 return await self._async_execute_command(
                     item_code, packet_builder, desired_state
                 )
+
+    def _preempt_poll(self) -> None:
+        """Wake and cancel an active background poll before actuation."""
+        if self._poll_active:
+            self._poll_preempted = True
+            self._poll_preempt_event.set()
+            self._status_event.set()
 
     async def _async_read_status_locked(self) -> MechanismStatus:
         """Fetch status while holding the single-connection lock."""

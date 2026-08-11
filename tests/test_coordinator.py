@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -26,6 +27,12 @@ def coordinator_without_hass() -> SesameStatusCoordinator:
     coordinator.cloud_unlock_enabled = False
     coordinator._schedule_cloud_refresh = Mock()
     return coordinator
+
+
+@asynccontextmanager
+async def external_command_slot():
+    """Provide an observable no-op external command reservation."""
+    yield
 
 
 @pytest.mark.asyncio
@@ -95,7 +102,10 @@ async def test_cloud_lock_uses_local_status_and_not_ble_command() -> None:
         stopped=True,
     )
     coordinator.data = before
-    coordinator.client = SimpleNamespace(async_lock=AsyncMock())
+    reserve = Mock(side_effect=external_command_slot)
+    coordinator.client = SimpleNamespace(
+        async_lock=AsyncMock(), async_external_command=reserve
+    )
     coordinator.cloud_client = SimpleNamespace(
         async_lock=AsyncMock(return_value=before)
     )
@@ -103,6 +113,7 @@ async def test_cloud_lock_uses_local_status_and_not_ble_command() -> None:
     await coordinator.async_lock()
 
     coordinator.cloud_client.async_lock.assert_awaited_once_with(before)
+    reserve.assert_called_once_with()
     coordinator.client.async_lock.assert_not_awaited()
     coordinator.async_set_updated_data.assert_called_once_with(before)
     coordinator._schedule_cloud_refresh.assert_called_once_with()
@@ -112,7 +123,10 @@ async def test_cloud_lock_uses_local_status_and_not_ble_command() -> None:
 async def test_cloud_unlock_requires_explicit_option() -> None:
     coordinator = coordinator_without_hass()
     coordinator.data = Mock()
-    coordinator.client = SimpleNamespace(async_unlock=AsyncMock())
+    reserve = Mock(side_effect=external_command_slot)
+    coordinator.client = SimpleNamespace(
+        async_unlock=AsyncMock(), async_external_command=reserve
+    )
     coordinator.cloud_client = SimpleNamespace(async_unlock=AsyncMock())
 
     with pytest.raises(HomeAssistantError, match="Remote unlock is disabled"):
@@ -120,6 +134,7 @@ async def test_cloud_unlock_requires_explicit_option() -> None:
 
     coordinator.cloud_client.async_unlock.assert_not_awaited()
     coordinator.client.async_unlock.assert_not_awaited()
+    reserve.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -127,7 +142,10 @@ async def test_cloud_unlock_routes_when_explicitly_enabled() -> None:
     coordinator = coordinator_without_hass()
     before = Mock()
     coordinator.data = before
-    coordinator.client = SimpleNamespace(async_unlock=AsyncMock())
+    reserve = Mock(side_effect=external_command_slot)
+    coordinator.client = SimpleNamespace(
+        async_unlock=AsyncMock(), async_external_command=reserve
+    )
     coordinator.cloud_client = SimpleNamespace(
         async_unlock=AsyncMock(return_value=before)
     )
@@ -136,6 +154,7 @@ async def test_cloud_unlock_routes_when_explicitly_enabled() -> None:
     await coordinator.async_unlock()
 
     coordinator.cloud_client.async_unlock.assert_awaited_once_with(before)
+    reserve.assert_called_once_with()
     coordinator.client.async_unlock.assert_not_awaited()
     coordinator.async_set_updated_data.assert_called_once_with(before)
     coordinator._schedule_cloud_refresh.assert_called_once_with()
@@ -145,6 +164,8 @@ async def test_cloud_unlock_routes_when_explicitly_enabled() -> None:
 async def test_cloud_failure_marks_coordinator_unavailable() -> None:
     coordinator = coordinator_without_hass()
     coordinator.data = Mock()
+    reserve = Mock(side_effect=external_command_slot)
+    coordinator.client = SimpleNamespace(async_external_command=reserve)
     coordinator.cloud_client = SimpleNamespace(
         async_lock=AsyncMock(
             side_effect=SesameCloudRateLimitError("quota exhausted")
@@ -156,18 +177,45 @@ async def test_cloud_failure_marks_coordinator_unavailable() -> None:
 
     coordinator.async_set_updated_data.assert_not_called()
     coordinator.async_set_update_error.assert_called_once()
+    reserve.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_cloud_reservation_failure_is_reported_as_ha_error() -> None:
+    coordinator = coordinator_without_hass()
+    coordinator.data = Mock()
+
+    @asynccontextmanager
+    async def rejected_slot():
+        raise SesameConnectionError(
+            "Another SESAME lock operation is already in progress"
+        )
+        yield
+
+    coordinator.client = SimpleNamespace(async_external_command=rejected_slot)
+    coordinator.cloud_client = SimpleNamespace(async_lock=AsyncMock())
+
+    with pytest.raises(HomeAssistantError, match="already in progress"):
+        await coordinator.async_lock()
+
+    coordinator.cloud_client.async_lock.assert_not_awaited()
+    coordinator.async_set_updated_data.assert_not_called()
+    coordinator.async_set_update_error.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_cloud_command_requires_local_ble_baseline() -> None:
     coordinator = coordinator_without_hass()
     coordinator.data = None
+    reserve = Mock(side_effect=external_command_slot)
+    coordinator.client = SimpleNamespace(async_external_command=reserve)
     coordinator.cloud_client = SimpleNamespace(async_lock=AsyncMock())
 
     with pytest.raises(HomeAssistantError, match="No local BLE status"):
         await coordinator.async_lock()
 
     coordinator.cloud_client.async_lock.assert_not_awaited()
+    reserve.assert_not_called()
 
 
 @pytest.mark.asyncio

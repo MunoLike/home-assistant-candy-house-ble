@@ -281,6 +281,38 @@ async def test_command_preempts_poll_without_overlapping_sessions(
 
 
 @pytest.mark.asyncio
+async def test_external_command_preempts_poll_without_overlap(monkeypatch) -> None:
+    client = status_client()
+    active = 0
+    maximum_active = 0
+    poll_started = asyncio.Event()
+
+    async def read_status():
+        nonlocal active, maximum_active
+        active += 1
+        maximum_active = max(maximum_active, active)
+        poll_started.set()
+        await client._status_event.wait()
+        active -= 1
+        if client._poll_preempted:
+            raise SesamePollPreempted
+        return mechanism_status(LockState.LOCKED)
+
+    monkeypatch.setattr(client, "_async_read_status_locked", read_status)
+
+    poll = asyncio.create_task(client.async_read_status())
+    await poll_started.wait()
+    async with client.async_external_command():
+        active += 1
+        maximum_active = max(maximum_active, active)
+        active -= 1
+
+    assert maximum_active == 1
+    with pytest.raises(SesamePollPreempted):
+        await poll
+
+
+@pytest.mark.asyncio
 async def test_command_cancels_poll_during_connection(monkeypatch) -> None:
     client = status_client()
     connect_started = asyncio.Event()

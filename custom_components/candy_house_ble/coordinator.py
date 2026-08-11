@@ -87,7 +87,7 @@ class SesameStatusCoordinator(DataUpdateCoordinator[MechanismStatus]):
         """Lock the SESAME and refresh its observed state."""
         if self.cloud_client is not None:
             before = self._require_current_status()
-            await self._async_actuate(
+            await self._async_cloud_actuate(
                 lambda: self.cloud_client.async_lock(before)
             )
             self._schedule_cloud_refresh()
@@ -102,12 +102,23 @@ class SesameStatusCoordinator(DataUpdateCoordinator[MechanismStatus]):
                     "Remote unlock is disabled in CANDY HOUSE BLE options"
                 )
             before = self._require_current_status()
-            await self._async_actuate(
+            await self._async_cloud_actuate(
                 lambda: self.cloud_client.async_unlock(before)
             )
             self._schedule_cloud_refresh()
             return
         await self._async_actuate(self.client.async_unlock)
+
+    async def _async_cloud_actuate(
+        self, operation: Callable[[], Awaitable[MechanismStatus]]
+    ) -> None:
+        """Run a cloud command while reserving the local BLE operation slot."""
+
+        async def reserved_operation() -> MechanismStatus:
+            async with self.client.async_external_command():
+                return await operation()
+
+        await self._async_actuate(reserved_operation)
 
     def _require_current_status(self) -> MechanismStatus:
         """Return the latest local BLE state preserved across a cloud command."""
