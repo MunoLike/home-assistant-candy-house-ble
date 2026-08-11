@@ -48,7 +48,7 @@ default to avoid noisy Recorder history and can be enabled from the device page.
 
 ## Status
 
-Current version: **0.1.0**.
+Current version: **0.2.0**.
 SESAME 5 Pro state reporting and lock/unlock commands, and SESAME Bot 2 BLE
 status and script execution, have been physically validated by the device owner
 through the Home Assistant UI.
