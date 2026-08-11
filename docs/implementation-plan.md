@@ -112,6 +112,30 @@ Before restart, remove `/config/custom_components/candy_house_ble`; no running H
 - Record phase timing for successful operations that take at least five seconds,
   without logging credentials or packet contents.
 
+### 9. Optional Hub 3 command transport — 2026-08-11
+
+- Keep status and diagnostic polling entirely on local BLE, but allow an
+  options-selected hybrid mode in which explicit lock/unlock commands use the
+  public CANDY HOUSE Web API through Hub 3.
+- Store the Web API key and its separate 16-byte device secret only in the Home
+  Assistant config entry. Validate them with one read-only request when options
+  are saved; do not reuse or expose the BLE manager key.
+- Disable remote unlock by default. Expose no toggle, generic command, history,
+  registration, or key-management method.
+- Send each physical command exactly once even when cached BLE state already
+  matches the target. Never retry a command after HTTP, quota, or confirmation
+  failure.
+- Confirm the command with a fresh matching cloud shadow. Normal success uses
+  one POST and one GET; at most two confirmation GETs are allowed. State polling
+  remains BLE to preserve local operation and the Web API quota.
+- Harden the BLE handoff at the same time: a user operation can cancel a poll
+  while it is still connecting, and notifications from an obsolete BLE session
+  are ignored by generation number.
+- Verification uses synthetic credentials, a fixed AES-CMAC vector, exact
+  mocked HTTP requests, transport-routing tests, BLE race tests, full lint/unit
+  tests, compilation, JSON checks, exact production sync, and `ha core check`.
+  The assistant does not send a real API command or operate the physical lock.
+
 ## Red-team gate
 
 The architecture review verdict was **REVISE**. This plan incorporates its required fixes: synthetic-only repository fixtures, QR dependency as the first spike, advertisement-identity resolution, read-only-first deployment, no physical command retry, and coexistence with the prototype integration.

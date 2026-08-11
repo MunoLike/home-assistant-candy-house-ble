@@ -18,6 +18,41 @@
       }
     }
   },
+  "options": {
+    "error": {
+      "cannot_connect_cloud": "Could not connect to the CANDY HOUSE Web API or validate the cloud device secret.",
+      "cloud_hub_offline": "CANDY HOUSE reports that Hub 3 is offline.",
+      "invalid_cloud_auth": "The CANDY HOUSE Web API rejected the API key."
+    },
+    "step": {
+      "cloud": {
+        "data": {
+          "cloud_api_key": "Web API key",
+          "cloud_secret_key": "Web API device secret",
+          "cloud_unlock_enabled": "Allow remote unlock"
+        },
+        "description": "Credentials are stored in this Home Assistant config entry. Saving performs one read-only Web API request. Remote unlock is disabled unless explicitly enabled.",
+        "title": "Configure Hub 3 command transport"
+      },
+      "init": {
+        "data": {
+          "command_transport": "Command transport"
+        },
+        "data_description": {
+          "command_transport": "State remains local BLE in either mode. Cloud sends only explicit lock and unlock commands through Hub 3."
+        },
+        "title": "Command transport"
+      }
+    }
+  },
+  "selector": {
+    "command_transport": {
+      "options": {
+        "ble": "Local Bluetooth",
+        "cloud": "CANDY HOUSE Web API through Hub 3"
+      }
+    }
+  },
   "entity": {
     "binary_sensor": {
       "battery_low": {

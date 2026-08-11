@@ -281,6 +281,45 @@ async def test_command_preempts_poll_without_overlapping_sessions(
 
 
 @pytest.mark.asyncio
+async def test_command_cancels_poll_during_connection(monkeypatch) -> None:
+    client = status_client()
+    connect_started = asyncio.Event()
+    connect_cancelled = asyncio.Event()
+
+    async def connect():
+        connect_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            connect_cancelled.set()
+
+    async def execute(*_args):
+        return mechanism_status(LockState.UNLOCKED)
+
+    monkeypatch.setattr(client, "_async_connect", connect)
+    monkeypatch.setattr(client, "_async_execute_command", execute)
+
+    poll = asyncio.create_task(client.async_read_status())
+    await connect_started.wait()
+    result = await client.async_unlock()
+
+    assert result.state is LockState.UNLOCKED
+    assert connect_cancelled.is_set()
+    with pytest.raises(SesamePollPreempted):
+        await poll
+
+
+@pytest.mark.asyncio
+async def test_stale_session_notification_is_ignored() -> None:
+    client = status_client()
+    client._session_generation = 2
+
+    await client._async_handle_notification(1, b"\xff")
+
+    assert client._notification_error is None
+
+
+@pytest.mark.asyncio
 async def test_duplicate_command_is_rejected_instead_of_queued(monkeypatch) -> None:
     client = status_client()
     entered = asyncio.Event()

@@ -14,6 +14,21 @@ Polling and operations each use one short BLE session. Normal polling runs every
 30 seconds; an explicit Home Assistant lock operation preempts an in-flight
 background poll instead of waiting behind its timeout.
 
+If Hub 3 is available, the integration options can instead route explicit lock
+and unlock commands through the public CANDY HOUSE Web API while keeping all
+periodic state and diagnostic polling on local BLE. This hybrid mode avoids the
+BLE connection delay seen when Hub 3 and Home Assistant compete for the same
+lock. It requires a Web API key and the separate Web API device secret; the BLE
+manager key from the setup QR is not interchangeable with that secret.
+
+Remote unlock is disabled by default and must be explicitly enabled in the
+integration options. A command is posted exactly once and is never retried. The
+integration then performs up to two read-only requests to confirm a fresh target
+state. A successful action therefore normally consumes two API requests and at
+most three. [CANDY HOUSE currently documents](https://jp.candyhouse.co/pages/sesame-biz-operation)
+a free allowance of 1,000 requests per month, so cloud mode is intentionally not
+used for periodic polling.
+
 The original state sensor remains available during the initial lock-entity
 validation period. It is deprecated and will be removed only after local
 dashboard and automation consumers have been migrated.
@@ -34,7 +49,9 @@ by the device owner through the Home Assistant UI.
 - Real device credentials are never test fixtures and must not be committed.
 - Tests generate synthetic credentials and QR images at runtime.
 - The command surface is limited to lock and unlock; there is no generic BLE
-  command API.
+  or Web API command method.
+- Web API credentials are stored only in the Home Assistant config entry and
+  its backups. They are never written to this repository or logs.
 
 See [the implementation plan](docs/implementation-plan.md) for acceptance
 criteria, rollback, and the staged rollout procedure.

@@ -95,6 +95,8 @@ class SesameStatusClient:
         self._actuation_lock = asyncio.Lock()
         self._poll_active = False
         self._poll_preempted = False
+        self._poll_preempt_event = asyncio.Event()
+        self._session_generation = 0
 
     async def async_read_status(self) -> MechanismStatus:
         """Fetch one authenticated mechanism status through HA Bluetooth."""
@@ -105,6 +107,7 @@ class SesameStatusClient:
                 raise SesamePollPreempted
             self._poll_active = True
             self._poll_preempted = False
+            self._poll_preempt_event.clear()
             try:
                 return await self._async_read_status_locked()
             finally:
@@ -136,6 +139,7 @@ class SesameStatusClient:
         async with self._actuation_lock:
             if self._poll_active:
                 self._poll_preempted = True
+                self._poll_preempt_event.set()
                 self._status_event.set()
             async with self._operation_lock:
                 return await self._async_execute_command(
@@ -145,7 +149,7 @@ class SesameStatusClient:
     async def _async_read_status_locked(self) -> MechanismStatus:
         """Fetch status while holding the single-connection lock."""
         try:
-            service_info = await self._async_connect()
+            service_info = await self._async_connect_for_poll()
 
             if self._poll_preempted:
                 raise SesamePollPreempted
@@ -174,6 +178,24 @@ class SesameStatusClient:
             raise SesameConnectionError("Unable to read SESAME status") from err
         finally:
             await self._async_disconnect()
+
+    async def _async_connect_for_poll(self):
+        """Connect for a poll, allowing an explicit operation to cancel it."""
+        connect_task = asyncio.create_task(self._async_connect())
+        preempt_task = asyncio.create_task(self._poll_preempt_event.wait())
+        try:
+            done, _pending = await asyncio.wait(
+                (connect_task, preempt_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if preempt_task in done or self._poll_preempt_event.is_set():
+                connect_task.cancel()
+                await asyncio.gather(connect_task, return_exceptions=True)
+                raise SesamePollPreempted
+            return await connect_task
+        finally:
+            preempt_task.cancel()
+            await asyncio.gather(preempt_task, return_exceptions=True)
 
     async def _async_execute_command(
         self,
@@ -287,6 +309,8 @@ class SesameStatusClient:
                 "SESAME is not reachable by a connectable scanner"
             )
 
+        self._session_generation += 1
+        generation = self._session_generation
         self._receiver = SegmentReceiver()
         self._cipher = None
         self._status = None
@@ -303,24 +327,39 @@ class SesameStatusClient:
                 BleakClientWithServiceCache,
                 service_info.device,
                 self._name,
-                disconnected_callback=self._on_disconnect,
+                disconnected_callback=lambda client: self._on_disconnect(
+                    generation, client
+                ),
                 max_attempts=3,
             )
         await self._client.start_notify(
-            NOTIFY_CHARACTERISTIC_UUID, self._on_notification
+            NOTIFY_CHARACTERISTIC_UUID,
+            lambda sender, data: self._on_notification(
+                generation, sender, data
+            ),
         )
         return service_info
 
-    def _on_notification(self, _sender: Any, data: bytearray) -> None:
+    def _on_notification(
+        self, generation: int, _sender: Any, data: bytearray
+    ) -> None:
+        if generation != self._session_generation:
+            return
         task = self._hass.async_create_task(
-            self._async_handle_notification(bytes(data)),
+            self._async_handle_notification(generation, bytes(data)),
             "candy_house_ble notification",
         )
         self._notification_tasks.add(task)
         task.add_done_callback(self._notification_tasks.discard)
 
-    async def _async_handle_notification(self, data: bytes) -> None:
+    async def _async_handle_notification(
+        self, generation: int, data: bytes
+    ) -> None:
+        if generation != self._session_generation:
+            return
         async with self._notification_lock:
+            if generation != self._session_generation:
+                return
             try:
                 completed = self._receiver.feed(data)
                 if completed is None:
@@ -377,13 +416,20 @@ class SesameStatusClient:
                 self._command_event.set()
                 self._status_queue.put_nowait(None)
 
-    def _on_disconnect(self, _client: BleakClientWithServiceCache) -> None:
+    def _on_disconnect(
+        self,
+        generation: int,
+        _client: BleakClientWithServiceCache,
+    ) -> None:
+        if generation != self._session_generation:
+            return
         self._login_event.set()
         self._status_event.set()
         self._command_event.set()
         self._status_queue.put_nowait(None)
 
     async def _async_disconnect(self) -> None:
+        self._session_generation += 1
         client, self._client = self._client, None
         if client is None:
             return
