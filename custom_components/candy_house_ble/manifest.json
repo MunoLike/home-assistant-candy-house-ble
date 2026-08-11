@@ -1,13 +1,20 @@
 {
   "domain": "candy_house_ble",
   "name": "CANDY HOUSE BLE",
-  "codeowners": ["@Khronos31"],
+  "codeowners": [
+    "@Khronos31"
+  ],
   "config_flow": true,
-  "dependencies": ["bluetooth", "file_upload"],
+  "dependencies": [
+    "bluetooth",
+    "file_upload"
+  ],
   "documentation": "https://github.com/Khronos31/home-assistant-candy-house-ble",
   "integration_type": "device",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/Khronos31/home-assistant-candy-house-ble/issues",
-  "requirements": ["pyrxing==0.6.1"],
+  "requirements": [
+    "pyrxing==0.6.1"
+  ],
   "version": "0.1.0"
 }
