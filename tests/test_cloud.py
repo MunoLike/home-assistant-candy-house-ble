@@ -5,15 +5,13 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from dataclasses import dataclass
-from unittest.mock import AsyncMock
 
 import pytest
 
 from custom_components.candy_house_ble.cloud import (
+    SesameCloudApiError,
     SesameCloudAuthenticationError,
     SesameCloudCommandClient,
-    SesameCloudCommandNotConfirmedError,
-    SesameCloudHubOfflineError,
     SesameCloudRateLimitError,
     normalize_cloud_secret_key,
 )
@@ -126,37 +124,29 @@ def test_secret_validation(value: str) -> None:
         ("async_unlock", ITEM_UNLOCK, LockState.UNLOCKED),
     ],
 )
-async def test_fixed_command_posts_once_and_confirms_fresh_shadow(
+async def test_fixed_command_posts_once_and_preserves_observed_ble_state(
     monkeypatch, operation: str, command: int, target: LockState
 ) -> None:
-    session = FakeSession(
-        [
-            FakeResponse(200, {"statusCode": 200}),
-            FakeResponse(200, cloud_status(target, position=-99)),
-        ]
-    )
+    session = FakeSession([FakeResponse(200, {"statusCode": 200})])
     cloud = client(session)
     monkeypatch.setattr(
         "custom_components.candy_house_ble.cloud.time.time",
         lambda: FIXED_TIMESTAMP,
     )
-    sleep = AsyncMock()
-    monkeypatch.setattr(
-        "custom_components.candy_house_ble.cloud.asyncio.sleep", sleep
+    before = status(
+        LockState.UNLOCKED
+        if target is LockState.LOCKED
+        else LockState.LOCKED
     )
 
-    result = await getattr(cloud, operation)(status(target))
+    result = await getattr(cloud, operation)(before)
 
-    assert result.state is target
-    assert result.position == -99
-    assert result.target is None
-    assert result.stopped is True
+    assert result is before
     assert [request[:2] for request in session.requests] == [
         (
             "POST",
             f"{BASE_URL}/{DEVICE_UUID.upper()}/cmd",
-        ),
-        ("GET", f"{BASE_URL}/{DEVICE_UUID.upper()}"),
+        )
     ]
     request_kwargs = session.requests[0][2]
     assert request_kwargs["headers"] == {"x-api-key": API_KEY}
@@ -165,61 +155,6 @@ async def test_fixed_command_posts_once_and_confirms_fresh_shadow(
         "history": "SG9tZSBBc3Npc3RhbnQ=",
         "sign": "147f0730c167544df86ac37f483547ab",
     }
-    sleep.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_matching_shadow_confirms_when_cloud_timestamp_lags(
-    monkeypatch,
-) -> None:
-    session = FakeSession(
-        [
-            FakeResponse(200, {"statusCode": 200}),
-            FakeResponse(
-                200,
-                cloud_status(
-                    LockState.LOCKED, timestamp=FIXED_TIMESTAMP - 10
-                ),
-            ),
-        ]
-    )
-    cloud = client(session)
-    monkeypatch.setattr(
-        "custom_components.candy_house_ble.cloud.time.time",
-        lambda: FIXED_TIMESTAMP,
-    )
-    monkeypatch.setattr(
-        "custom_components.candy_house_ble.cloud.asyncio.sleep", AsyncMock()
-    )
-
-    result = await cloud.async_lock(status(LockState.UNLOCKED))
-
-    assert result.state is LockState.LOCKED
-    assert [request[0] for request in session.requests] == ["POST", "GET"]
-
-
-@pytest.mark.asyncio
-async def test_wrong_shadow_never_confirms_or_retries_command(monkeypatch) -> None:
-    session = FakeSession(
-        [
-            FakeResponse(200, {"statusCode": 200}),
-            FakeResponse(200, cloud_status(LockState.UNLOCKED)),
-            FakeResponse(200, cloud_status(LockState.UNLOCKED)),
-        ]
-    )
-    cloud = client(session)
-    monkeypatch.setattr(
-        "custom_components.candy_house_ble.cloud.time.time",
-        lambda: FIXED_TIMESTAMP,
-    )
-    monkeypatch.setattr(
-        "custom_components.candy_house_ble.cloud.asyncio.sleep", AsyncMock()
-    )
-
-    with pytest.raises(SesameCloudCommandNotConfirmedError):
-        await cloud.async_lock(status(LockState.UNLOCKED))
-
-    assert [request[0] for request in session.requests] == ["POST", "GET", "GET"]
 
 
 @pytest.mark.asyncio
@@ -251,26 +186,31 @@ async def test_authentication_error_does_not_include_credentials() -> None:
 
 
 @pytest.mark.asyncio
-async def test_offline_hub_fails_without_retrying_command(monkeypatch) -> None:
-    session = FakeSession(
-        [
-            FakeResponse(200, {"statusCode": 200}),
-            FakeResponse(
-                200,
-                cloud_status(LockState.UNLOCKED, online=False),
-            ),
-        ]
-    )
+async def test_rejected_command_is_not_retried(monkeypatch) -> None:
+    session = FakeSession([FakeResponse(200, {"statusCode": 500})])
     cloud = client(session)
     monkeypatch.setattr(
         "custom_components.candy_house_ble.cloud.time.time",
         lambda: FIXED_TIMESTAMP,
     )
-    monkeypatch.setattr(
-        "custom_components.candy_house_ble.cloud.asyncio.sleep", AsyncMock()
-    )
 
-    with pytest.raises(SesameCloudHubOfflineError):
+    with pytest.raises(SesameCloudApiError, match="did not accept"):
         await cloud.async_unlock(status())
 
-    assert [request[0] for request in session.requests] == ["POST", "GET"]
+    assert [request[0] for request in session.requests] == ["POST"]
+
+
+@pytest.mark.asyncio
+async def test_read_only_status_reports_offline_hub() -> None:
+    session = FakeSession(
+        [
+            FakeResponse(
+                200,
+                cloud_status(LockState.UNLOCKED, online=False),
+            )
+        ]
+    )
+
+    result = await client(session).async_get_status()
+
+    assert result.hub_online is False

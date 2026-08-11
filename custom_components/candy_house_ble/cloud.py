@@ -5,9 +5,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-import logging
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from uuid import UUID
 
 import aiohttp
@@ -17,13 +16,9 @@ from cryptography.hazmat.primitives.ciphers import algorithms
 from .const import (
     CLOUD_API_BASE_URL,
     CLOUD_API_TIMEOUT,
-    CLOUD_CONFIRM_ATTEMPTS,
-    CLOUD_CONFIRM_DELAY,
     CLOUD_HISTORY_TAG,
 )
 from .protocol import ITEM_LOCK, ITEM_UNLOCK, LockState, MechanismStatus
-
-_LOGGER = logging.getLogger(__name__)
 
 
 class SesameCloudError(Exception):
@@ -48,10 +43,6 @@ class SesameCloudRateLimitError(SesameCloudApiError):
 
 class SesameCloudHubOfflineError(SesameCloudError):
     """Hub 3 is reported offline."""
-
-
-class SesameCloudCommandNotConfirmedError(SesameCloudError):
-    """The cloud accepted a command without a matching shadow."""
 
 
 def normalize_cloud_secret_key(value: str) -> str:
@@ -119,7 +110,7 @@ class SesameCloudStatus:
 
 
 class SesameCloudCommandClient:
-    """Send only fixed lock/unlock commands and confirm their cloud shadow."""
+    """Send only fixed lock/unlock commands through the public API."""
 
     def __init__(
         self,
@@ -202,24 +193,21 @@ class SesameCloudCommandClient:
         return SesameCloudStatus.from_payload(await self._async_request("GET"))
 
     async def async_lock(self, before: MechanismStatus) -> MechanismStatus:
-        """Send and confirm the fixed lock command."""
-        return await self._async_execute(ITEM_LOCK, LockState.LOCKED, before)
+        """Send the fixed lock command once and preserve observed BLE state."""
+        return await self._async_execute(ITEM_LOCK, before)
 
     async def async_unlock(self, before: MechanismStatus) -> MechanismStatus:
-        """Send and confirm the fixed unlock command."""
-        return await self._async_execute(
-            ITEM_UNLOCK, LockState.UNLOCKED, before
-        )
+        """Send the fixed unlock command once and preserve observed BLE state."""
+        return await self._async_execute(ITEM_UNLOCK, before)
 
     async def _async_execute(
         self,
         command: int,
-        target: LockState,
         before: MechanismStatus,
         *,
         timestamp: int | None = None,
     ) -> MechanismStatus:
-        """Send once, then confirm the target state without command retry."""
+        """Send once without claiming an unobserved physical state."""
         async with self._operation_lock:
             command_timestamp = (
                 int(time.time()) if timestamp is None else int(timestamp)
@@ -243,38 +231,4 @@ class SesameCloudCommandClient:
                 raise SesameCloudApiError(
                     "CANDY HOUSE cloud did not accept the command"
                 )
-
-            for _attempt in range(CLOUD_CONFIRM_ATTEMPTS):
-                await asyncio.sleep(CLOUD_CONFIRM_DELAY)
-                status = await self.async_get_status()
-                _LOGGER.debug(
-                    "Cloud confirmation %d/%d: requested=%s observed=%s "
-                    "timestamp=%s command_timestamp=%s hub_online=%s",
-                    _attempt + 1,
-                    CLOUD_CONFIRM_ATTEMPTS,
-                    target,
-                    status.state,
-                    status.timestamp,
-                    command_timestamp,
-                    status.hub_online,
-                )
-                if status.hub_online is False:
-                    raise SesameCloudHubOfflineError(
-                        "CANDY HOUSE cloud reports that Hub 3 is offline"
-                    )
-                if status.state is target:
-                    return replace(
-                        before,
-                        state=target,
-                        target=None,
-                        position=(
-                            status.position
-                            if status.position is not None
-                            else before.position
-                        ),
-                        stopped=True,
-                    )
-            raise SesameCloudCommandNotConfirmedError(
-                "CANDY HOUSE cloud accepted the command but no matching "
-                "lock state was observed"
-            )
+            return before

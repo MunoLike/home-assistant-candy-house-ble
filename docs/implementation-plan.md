@@ -125,11 +125,12 @@ Before restart, remove `/config/custom_components/candy_house_ble`; no running H
 - Send each physical command exactly once even when cached BLE state already
   matches the target. Never retry a command after HTTP, quota, or confirmation
   failure.
-- Confirm the command with a matching cloud shadow and reject an offline Hub or
-  opposing state. Do not compare the Hub's lagging device-event timestamp with
-  the Home Assistant host clock. Normal success uses one POST and one GET; at
-  most two confirmation GETs are allowed. State polling remains BLE to preserve
-  local operation and the Web API quota.
+- Treat a successful fixed POST as command acceptance, not proof of physical
+  completion. Preserve the last observed BLE state instead of optimistically
+  claiming the target, then run a delayed local BLE refresh in the background.
+  Runtime testing showed that Hub 3's immediate cloud shadow remains stale after
+  successful physical movement. Each action therefore uses one API request and
+  all authoritative state remains local BLE.
 - Harden the BLE handoff at the same time: a user operation can cancel a poll
   while it is still connecting, and notifications from an obsolete BLE session
   are ignored by generation number.

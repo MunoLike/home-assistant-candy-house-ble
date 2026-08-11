@@ -24,6 +24,7 @@ def coordinator_without_hass() -> SesameStatusCoordinator:
     coordinator.async_set_update_error = Mock()
     coordinator.cloud_client = None
     coordinator.cloud_unlock_enabled = False
+    coordinator._schedule_cloud_refresh = Mock()
     return coordinator
 
 
@@ -93,26 +94,18 @@ async def test_cloud_lock_uses_local_status_and_not_ble_command() -> None:
         critical=False,
         stopped=True,
     )
-    after = MechanismStatus(
-        state=LockState.LOCKED,
-        battery_raw=2925,
-        target=None,
-        position=-86,
-        battery_low=False,
-        critical=False,
-        stopped=True,
-    )
     coordinator.data = before
     coordinator.client = SimpleNamespace(async_lock=AsyncMock())
     coordinator.cloud_client = SimpleNamespace(
-        async_lock=AsyncMock(return_value=after)
+        async_lock=AsyncMock(return_value=before)
     )
 
     await coordinator.async_lock()
 
     coordinator.cloud_client.async_lock.assert_awaited_once_with(before)
     coordinator.client.async_lock.assert_not_awaited()
-    coordinator.async_set_updated_data.assert_called_once_with(after)
+    coordinator.async_set_updated_data.assert_called_once_with(before)
+    coordinator._schedule_cloud_refresh.assert_called_once_with()
 
 
 @pytest.mark.asyncio
@@ -133,11 +126,10 @@ async def test_cloud_unlock_requires_explicit_option() -> None:
 async def test_cloud_unlock_routes_when_explicitly_enabled() -> None:
     coordinator = coordinator_without_hass()
     before = Mock()
-    after = Mock()
     coordinator.data = before
     coordinator.client = SimpleNamespace(async_unlock=AsyncMock())
     coordinator.cloud_client = SimpleNamespace(
-        async_unlock=AsyncMock(return_value=after)
+        async_unlock=AsyncMock(return_value=before)
     )
     coordinator.cloud_unlock_enabled = True
 
@@ -145,7 +137,8 @@ async def test_cloud_unlock_routes_when_explicitly_enabled() -> None:
 
     coordinator.cloud_client.async_unlock.assert_awaited_once_with(before)
     coordinator.client.async_unlock.assert_not_awaited()
-    coordinator.async_set_updated_data.assert_called_once_with(after)
+    coordinator.async_set_updated_data.assert_called_once_with(before)
+    coordinator._schedule_cloud_refresh.assert_called_once_with()
 
 
 @pytest.mark.asyncio
@@ -175,3 +168,43 @@ async def test_cloud_command_requires_local_ble_baseline() -> None:
         await coordinator.async_lock()
 
     coordinator.cloud_client.async_lock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delayed_cloud_verification_publishes_local_ble_state(
+    monkeypatch,
+) -> None:
+    coordinator = coordinator_without_hass()
+    observed = Mock()
+    coordinator.client = SimpleNamespace(
+        async_read_status=AsyncMock(return_value=observed)
+    )
+    monkeypatch.setattr(
+        "custom_components.candy_house_ble.coordinator.asyncio.sleep",
+        AsyncMock(),
+    )
+
+    await coordinator._async_delayed_ble_refresh()
+
+    coordinator.async_set_updated_data.assert_called_once_with(observed)
+
+
+@pytest.mark.asyncio
+async def test_failed_delayed_verification_preserves_last_state(
+    monkeypatch,
+) -> None:
+    coordinator = coordinator_without_hass()
+    coordinator.client = SimpleNamespace(
+        async_read_status=AsyncMock(
+            side_effect=SesameConnectionError("still contended")
+        )
+    )
+    monkeypatch.setattr(
+        "custom_components.candy_house_ble.coordinator.asyncio.sleep",
+        AsyncMock(),
+    )
+
+    await coordinator._async_delayed_ble_refresh()
+
+    coordinator.async_set_updated_data.assert_not_called()
+    coordinator.async_set_update_error.assert_not_called()
