@@ -1,10 +1,11 @@
-"""One-shot SESAME 5 Pro BLE status and fixed actuation client."""
+"""One-shot SESAME OS3 BLE status and fixed actuation client."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import replace
 from time import monotonic
 from typing import Any
@@ -15,11 +16,12 @@ from homeassistant.core import HomeAssistant
 from .const import (
     BOT_2_COMMAND_COOLDOWN,
     BOT_2_INDETERMINATE_COOLDOWN,
+    BOT_MODELS,
     COMMAND_COMPLETION_TIMEOUT,
     COMMAND_TIMEOUT,
     CONNECT_TIMEOUT,
-    MODEL_BOT_2,
-    MODEL_SESAME_5_PRO,
+    DISCONNECT_TIMEOUT,
+    LOCK_MODELS,
     NOTIFY_CHARACTERISTIC_UUID,
     STATUS_TIMEOUT,
     WRITE_CHARACTERISTIC_UUID,
@@ -48,6 +50,7 @@ from .protocol import (
     parse_mechanism_status,
     parse_notification,
 )
+from .session import SesameBLESessionGate
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -80,16 +83,19 @@ class SesameStatusClient:
         device_id: bytes,
         secret_key: bytes,
         name: str,
+        session_gate: SesameBLESessionGate | None = None,
     ) -> None:
         self._hass = hass
         self._model = model
         self._device_id = device_id
         self._secret_key = secret_key
         self._name = name
+        self._session_gate = session_gate or SesameBLESessionGate()
         self._receiver = SegmentReceiver()
         self._cipher: SesameSessionCipher | None = None
         self._client: BleakClientWithServiceCache | None = None
         self._login_event = asyncio.Event()
+        self._notify_ready_event = asyncio.Event()
         self._status_event = asyncio.Event()
         self._command_event = asyncio.Event()
         self._status_queue: asyncio.Queue[MechanismStatus | None] = asyncio.Queue()
@@ -99,6 +105,7 @@ class SesameStatusClient:
         self._notification_lock = asyncio.Lock()
         self._notification_tasks: set[asyncio.Task[None]] = set()
         self._notification_error: Exception | None = None
+        self._last_notification: tuple[int, int, int] | None = None
         self._operation_lock = asyncio.Lock()
         self._actuation_lock = asyncio.Lock()
         self._poll_active = False
@@ -119,16 +126,22 @@ class SesameStatusClient:
         try:
             if self._actuation_lock.locked():
                 raise SesamePollPreempted
-            async with self._operation_lock:
-                if self._actuation_lock.locked():
-                    raise SesamePollPreempted
-                self._poll_active = True
-                self._poll_preempted = False
-                self._poll_preempt_event.clear()
-                try:
+            self._poll_active = True
+            self._poll_preempted = False
+            self._poll_preempt_event.clear()
+            try:
+                async with (
+                    self._session_gate.poll(self._preempt_poll),
+                    self._operation_lock,
+                ):
+                    if (
+                        self._actuation_lock.locked()
+                        or self._poll_preempted
+                    ):
+                        raise SesamePollPreempted
                     status = await self._async_read_status_locked()
-                finally:
-                    self._poll_active = False
+            finally:
+                self._poll_active = False
         except SesamePollPreempted:
             self._metrics.operation_preempted("poll")
             raise
@@ -162,7 +175,7 @@ class SesameStatusClient:
         )
 
     async def async_run_script(self, script_index: int) -> None:
-        """Run one allowlisted Bot 2 on-device script slot once."""
+        """Run one allowlisted Bot 2/3 on-device script slot once."""
         started_at = monotonic()
         self._metrics.operation_started("bot_script")
         try:
@@ -178,10 +191,10 @@ class SesameStatusClient:
         )
 
     async def _async_run_script(self, script_index: int) -> None:
-        """Run one Bot 2 script inside the metrics boundary."""
-        if self._model != MODEL_BOT_2:
+        """Run one Bot 2/3 script inside the metrics boundary."""
+        if self._model not in BOT_MODELS:
             raise SesameConnectionError(
-                "Bot 2 scripts are not supported for this device"
+                "Bot 2/3 scripts are not supported for this device"
             )
         try:
             item_code = bot_2_run_script_item_code(script_index)
@@ -189,7 +202,7 @@ class SesameStatusClient:
             raise SesameConnectionError(str(err)) from err
         if monotonic() < self._bot_command_blocked_until:
             raise SesameConnectionError(
-                "Bot 2 command cooldown is active; do not retry yet"
+                "Bot 2/3 command cooldown is active; do not retry yet"
             )
         if self._actuation_lock.locked():
             raise SesameConnectionError(
@@ -197,7 +210,7 @@ class SesameStatusClient:
             )
         async with self._actuation_lock:
             self._preempt_poll()
-            async with self._operation_lock:
+            async with self._session_gate.command(), self._operation_lock:
                 await self._async_execute_acknowledged_bot_script(
                     script_index, item_code
                 )
@@ -223,7 +236,7 @@ class SesameStatusClient:
 
     def _require_lock_model(self) -> None:
         """Prevent non-lock devices from reaching physical commands."""
-        if self._model != MODEL_SESAME_5_PRO:
+        if self._model not in LOCK_MODELS:
             raise SesameConnectionError(
                 "Physical lock commands are not supported for this device"
             )
@@ -241,7 +254,7 @@ class SesameStatusClient:
             )
         async with self._actuation_lock:
             self._preempt_poll()
-            async with self._operation_lock:
+            async with self._session_gate.command(), self._operation_lock:
                 return await self._async_execute_command(
                     item_code, packet_builder, desired_state
                 )
@@ -276,13 +289,17 @@ class SesameStatusClient:
         except TimeoutError as err:
             raise SesameConnectionError(
                 "Timed out waiting for SESAME status"
+                f"{self._notification_context()}"
             ) from err
         except SesamePollPreempted:
             raise
         except SesameConnectionError:
             raise
         except Exception as err:
-            raise SesameConnectionError("Unable to read SESAME status") from err
+            raise SesameConnectionError(
+                "Unable to read SESAME status: "
+                f"{type(err).__name__}: {err}"
+            ) from err
         finally:
             await self._async_disconnect()
 
@@ -296,8 +313,12 @@ class SesameStatusClient:
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if preempt_task in done or self._poll_preempt_event.is_set():
-                connect_task.cancel()
-                await asyncio.gather(connect_task, return_exceptions=True)
+                # Do not cancel start_notify while BlueZ is writing the CCC
+                # descriptor.  That race can abort bluetoothd on low-end Pi
+                # adapters.  Finish subscribing, then disconnect in the
+                # caller's finally block before handing off the adapter.
+                with suppress(Exception):
+                    await connect_task
                 raise SesamePollPreempted
             return await connect_task
         finally:
@@ -402,18 +423,21 @@ class SesameStatusClient:
         except TimeoutError as err:
             raise SesameConnectionError(
                 "Timed out waiting for SESAME command acknowledgement"
+                f"{self._notification_context()}"
             ) from err
         except SesameConnectionError:
             raise
         except Exception as err:
-            raise SesameConnectionError("Unable to operate SESAME") from err
+            raise SesameConnectionError(
+                f"Unable to operate SESAME: {type(err).__name__}: {err}"
+            ) from err
         finally:
             await self._async_disconnect()
 
     async def _async_execute_acknowledged_bot_script(
         self, script_index: int, item_code: int
     ) -> None:
-        """Execute one fixed Bot 2 script and wait only for its response."""
+        """Execute one fixed Bot 2/3 script and wait only for its response."""
         wrote_command = False
         try:
             await self._async_connect()
@@ -423,7 +447,7 @@ class SesameStatusClient:
                 raise self._notification_error
             if self._cipher is None or self._client is None:
                 raise SesameConnectionError(
-                    "Bot 2 disconnected before command authentication"
+                    "Bot 2/3 disconnected before command authentication"
                 )
 
             self._expected_command_item = item_code
@@ -444,11 +468,11 @@ class SesameStatusClient:
                 raise self._notification_error
             if self._command_result is None:
                 raise SesameConnectionError(
-                    "Bot 2 disconnected before acknowledging script"
+                    "Bot 2/3 disconnected before acknowledging script"
                 )
             if self._command_result != 0:
                 raise SesameConnectionError(
-                    "Bot 2 rejected script with result "
+                    "Bot 2/3 rejected script with result "
                     f"{self._command_result}"
                 )
             self._bot_command_blocked_until = max(
@@ -459,17 +483,17 @@ class SesameStatusClient:
             if wrote_command:
                 self._block_indeterminate_bot_retry()
                 raise SesameConnectionError(
-                    "Bot 2 script may have executed but acknowledgement was "
+                    "Bot 2/3 script may have executed but acknowledgement was "
                     "not observed; outcome is indeterminate"
                 ) from err
             raise SesameConnectionError(
-                "Timed out waiting for Bot 2 script authentication"
+                "Timed out waiting for Bot 2/3 script authentication"
             ) from err
         except SesameConnectionError as err:
             if wrote_command and self._command_result is None:
                 self._block_indeterminate_bot_retry()
                 raise SesameConnectionError(
-                    "Bot 2 script may have executed but acknowledgement was "
+                    "Bot 2/3 script may have executed but acknowledgement was "
                     "not observed; outcome is indeterminate"
                 ) from err
             raise
@@ -477,11 +501,11 @@ class SesameStatusClient:
             if wrote_command:
                 self._block_indeterminate_bot_retry()
                 raise SesameConnectionError(
-                    "Bot 2 script may have executed but delivery could not be "
+                    "Bot 2/3 script may have executed but delivery could not be "
                     "confirmed; outcome is indeterminate"
                 ) from err
             raise SesameConnectionError(
-                "Unable to connect to Bot 2 before sending script; no command "
+                "Unable to connect to Bot 2/3 before sending script; no command "
                 "was sent"
             ) from err
         finally:
@@ -527,6 +551,8 @@ class SesameStatusClient:
         self._expected_command_item = None
         self._command_result = None
         self._notification_error = None
+        self._last_notification = None
+        self._notify_ready_event = asyncio.Event()
         self._login_event.clear()
         self._status_event.clear()
         self._command_event.clear()
@@ -541,6 +567,10 @@ class SesameStatusClient:
                     generation, client
                 ),
                 max_attempts=3,
+                # BlueZ removes these short-lived GATT object paths on every
+                # disconnect. Reusing the Bleak service cache can therefore
+                # target a stale WriteValue object on the next session.
+                use_services_cache=False,
             )
         await self._client.start_notify(
             NOTIFY_CHARACTERISTIC_UUID,
@@ -548,6 +578,7 @@ class SesameStatusClient:
                 generation, sender, data
             ),
         )
+        self._notify_ready_event.set()
         return service_info
 
     def _on_notification(
@@ -576,6 +607,11 @@ class SesameStatusClient:
                     return
                 segment_type, payload = completed
                 notification = parse_notification(segment_type, payload, self._cipher)
+                self._last_notification = (
+                    notification.opcode,
+                    notification.item_code,
+                    len(notification.payload),
+                )
                 _LOGGER.debug(
                     "SESAME notification model=%d opcode=%d item=%d "
                     "payload_length=%d",
@@ -591,6 +627,12 @@ class SesameStatusClient:
                 ):
                     if len(notification.payload) != 4:
                         raise ProtocolError("Invalid SESAME initial token")
+                    # BlueZ can deliver the initial token before its
+                    # StartNotify call has returned.  Wait for CCC setup to
+                    # finish before writing login on the other characteristic.
+                    await self._notify_ready_event.wait()
+                    if generation != self._session_generation:
+                        return
                     login_packet, self._cipher = build_login_packet(
                         self._secret_key, notification.payload
                     )
@@ -626,7 +668,7 @@ class SesameStatusClient:
                 ):
                     self._status = (
                         parse_bot_2_mechanism_status(notification.payload)
-                        if self._model == MODEL_BOT_2
+                        if self._model in BOT_MODELS
                         else parse_mechanism_status(notification.payload)
                     )
                     self._status_event.set()
@@ -645,6 +687,7 @@ class SesameStatusClient:
     ) -> None:
         if generation != self._session_generation:
             return
+        self._notify_ready_event.set()
         self._login_event.set()
         self._status_event.set()
         self._command_event.set()
@@ -652,11 +695,24 @@ class SesameStatusClient:
 
     async def _async_disconnect(self) -> None:
         self._session_generation += 1
+        self._notify_ready_event.set()
         client, self._client = self._client, None
         if client is None:
             return
+        if not client.is_connected:
+            return
         try:
-            if client.is_connected:
+            async with asyncio.timeout(DISCONNECT_TIMEOUT):
                 await client.disconnect()
         except Exception:
             _LOGGER.debug("Error disconnecting from SESAME", exc_info=True)
+
+    def _notification_context(self) -> str:
+        """Describe the last decoded frame without retaining its payload."""
+        if self._last_notification is None:
+            return "; no notification was decoded"
+        opcode, item_code, payload_length = self._last_notification
+        return (
+            f"; last notification opcode={opcode}, item={item_code}, "
+            f"payload_length={payload_length}"
+        )

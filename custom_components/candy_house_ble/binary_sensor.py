@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import CandyHouseConfigEntry
-from .const import CONF_MODEL, MODEL_BOT_2
+from .const import BOT_MODELS, CONF_MODEL
 from .entity import CandyHouseEntity
 
 
@@ -21,7 +21,7 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up SESAME diagnostic binary sensors."""
-    if entry.data[CONF_MODEL] == MODEL_BOT_2:
+    if entry.data[CONF_MODEL] in BOT_MODELS:
         entities = [SesameMovingSensor(entry)]
     else:
         entities = [

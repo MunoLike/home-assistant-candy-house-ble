@@ -15,7 +15,6 @@ from custom_components.candy_house_ble.const import (
     CONF_MODEL,
     CONF_QR_IMAGE,
     CONF_SECRET_KEY,
-    MODEL_BOT_2,
 )
 from custom_components.candy_house_ble.qr import (
     ManagerCredentialRequired,
@@ -98,9 +97,10 @@ async def test_create_entry_stores_parsed_credential_without_address(
 
 
 @pytest.mark.asyncio
-async def test_create_bot_2_entry_uses_model_17(monkeypatch) -> None:
+@pytest.mark.parametrize("model", [7, 17, 21, 35])
+async def test_create_entry_preserves_model(model, monkeypatch) -> None:
     credential = SesameCredential(
-        model=MODEL_BOT_2,
+        model=model,
         name="Test Bot 2",
         level=1,
         secret_key=SECRET_KEY,
@@ -125,7 +125,7 @@ async def test_create_bot_2_entry_uses_model_17(monkeypatch) -> None:
     assert result["title"] == "Test Bot 2"
     assert result["data"] == {
         CONF_DEVICE_ID: str(DEVICE_UUID),
-        CONF_MODEL: MODEL_BOT_2,
+        CONF_MODEL: model,
         CONF_SECRET_KEY: SECRET_KEY.hex(),
     }
 

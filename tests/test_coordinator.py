@@ -16,7 +16,6 @@ from custom_components.candy_house_ble.const import (
     CONF_DEVICE_ID,
     CONF_MODEL,
     CONF_SECRET_KEY,
-    MODEL_BOT_2,
     MODEL_SESAME_5_PRO,
 )
 from custom_components.candy_house_ble.coordinator import SesameStatusCoordinator
@@ -61,7 +60,7 @@ def test_coordinator_ignores_removed_transport_options(monkeypatch) -> None:
         async_on_unload=Mock(),
     )
 
-    coordinator = SesameStatusCoordinator(SimpleNamespace(), entry)
+    coordinator = SesameStatusCoordinator(SimpleNamespace(data={}), entry)
 
     local_constructor.assert_called_once()
     assert not hasattr(coordinator, "cloud_client")
@@ -70,11 +69,13 @@ def test_coordinator_ignores_removed_transport_options(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method_name", ["async_lock", "async_unlock"])
+@pytest.mark.parametrize("model", [17, 35])
 async def test_bot_2_coordinator_rejects_all_lock_commands(
+    model,
     method_name: str,
 ) -> None:
     coordinator = coordinator_without_hass()
-    coordinator.model = MODEL_BOT_2
+    coordinator.model = model
     coordinator.client = SimpleNamespace(
         async_lock=AsyncMock(), async_unlock=AsyncMock()
     )
@@ -94,10 +95,13 @@ async def test_bot_2_coordinator_rejects_all_lock_commands(
         ("async_unlock", LockState.UNLOCKED),
     ],
 )
+@pytest.mark.parametrize("model", [7, 21])
 async def test_lock_commands_always_use_local_ble(
+    model,
     method_name: str, expected_state: LockState
 ) -> None:
     coordinator = coordinator_without_hass()
+    coordinator.model = model
     terminal = mechanism_status(expected_state)
     coordinator.client = SimpleNamespace(
         async_lock=AsyncMock(return_value=terminal),
@@ -111,9 +115,10 @@ async def test_lock_commands_always_use_local_ble(
 
 
 @pytest.mark.asyncio
-async def test_bot_2_script_runs_local_fixed_action_then_refreshes() -> None:
+@pytest.mark.parametrize("model", [17, 35])
+async def test_bot_2_script_runs_local_fixed_action_then_refreshes(model) -> None:
     coordinator = coordinator_without_hass()
-    coordinator.model = MODEL_BOT_2
+    coordinator.model = model
     coordinator.client = SimpleNamespace(async_run_script=AsyncMock())
 
     await coordinator.async_run_script(4)
@@ -123,8 +128,10 @@ async def test_bot_2_script_runs_local_fixed_action_then_refreshes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_lock_model_rejects_bot_2_script() -> None:
+@pytest.mark.parametrize("model", [7, 21])
+async def test_lock_model_rejects_bot_2_script(model) -> None:
     coordinator = coordinator_without_hass()
+    coordinator.model = model
     coordinator.client = SimpleNamespace(async_run_script=AsyncMock())
 
     with pytest.raises(HomeAssistantError, match="not supported"):

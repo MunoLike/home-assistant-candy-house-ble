@@ -28,9 +28,10 @@ def service_info(address: str, *, device_id: bytes = DEVICE_ID):
     )
 
 
-def test_advertisement_matches_model_and_uuid() -> None:
+@pytest.mark.parametrize("model", [7, 17, 21, 35])
+def test_advertisement_matches_model_and_uuid(model: int) -> None:
     assert advertisement_matches(
-        [SERVICE_UUID.upper()], {0x055A: manufacturer_payload()}, 7, DEVICE_ID
+        [SERVICE_UUID.upper()], {0x055A: manufacturer_payload(model)}, model, DEVICE_ID
     )
 
 

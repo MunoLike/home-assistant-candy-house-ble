@@ -16,6 +16,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     CONNECT_TIMEOUT,
+    DISCONNECT_TIMEOUT,
     MODEL_REMOTE_NANO,
     NOTIFY_CHARACTERISTIC_UUID,
     STATUS_TIMEOUT,
@@ -33,6 +34,7 @@ from .protocol import (
     build_login_packet,
     parse_notification,
 )
+from .session import get_ble_session_gate
 
 ITEM_TARGET_LIST = 102
 TARGET_SLOT_SIZE = 23
@@ -89,10 +91,12 @@ class RemoteNanoTargetReader:
         self._hass = hass
         self._device_id = device_id
         self._secret_key = secret_key
+        self._session_gate = get_ble_session_gate(hass)
         self._receiver = SegmentReceiver()
         self._cipher: SesameSessionCipher | None = None
         self._client: BleakClientWithServiceCache | None = None
         self._login_event = asyncio.Event()
+        self._notify_ready_event = asyncio.Event()
         self._target_event = asyncio.Event()
         self._summary: RemoteNanoTargetSummary | None = None
         self._error: Exception | None = None
@@ -102,6 +106,11 @@ class RemoteNanoTargetReader:
 
     async def async_read(self) -> RemoteNanoTargetSummary:
         """Read one redacted target-list summary without sending a command."""
+        async with self._session_gate.command():
+            return await self._async_read_locked()
+
+    async def _async_read_locked(self) -> RemoteNanoTargetSummary:
+        """Read target slots while holding the shared BLE adapter gate."""
         service_info = await async_resolve_service_info(
             self._hass, MODEL_REMOTE_NANO, self._device_id
         )
@@ -116,6 +125,7 @@ class RemoteNanoTargetReader:
         self._cipher = None
         self._summary = None
         self._error = None
+        self._notify_ready_event = asyncio.Event()
         self._login_event.clear()
         self._target_event.clear()
         try:
@@ -128,6 +138,7 @@ class RemoteNanoTargetReader:
                         generation, client
                     ),
                     max_attempts=3,
+                    use_services_cache=False,
                 )
             await self._client.start_notify(
                 NOTIFY_CHARACTERISTIC_UUID,
@@ -135,6 +146,7 @@ class RemoteNanoTargetReader:
                     generation, sender, data
                 ),
             )
+            self._notify_ready_event.set()
             async with asyncio.timeout(STATUS_TIMEOUT):
                 await self._login_event.wait()
             self._raise_notification_error()
@@ -199,6 +211,9 @@ class RemoteNanoTargetReader:
                 ):
                     if len(notification.payload) != 4:
                         raise ProtocolError("Invalid Remote Nano initial token")
+                    await self._notify_ready_event.wait()
+                    if generation != self._generation:
+                        return
                     packet, self._cipher = build_login_packet(
                         self._secret_key, notification.payload
                     )
@@ -241,16 +256,20 @@ class RemoteNanoTargetReader:
     ) -> None:
         if generation != self._generation:
             return
+        self._notify_ready_event.set()
         self._login_event.set()
         self._target_event.set()
 
     async def _async_disconnect(self) -> None:
         self._generation += 1
+        self._notify_ready_event.set()
         client, self._client = self._client, None
         if client is None:
             return
+        if not client.is_connected:
+            return
         try:
-            if client.is_connected:
+            async with asyncio.timeout(DISCONNECT_TIMEOUT):
                 await client.disconnect()
         except Exception:
             pass

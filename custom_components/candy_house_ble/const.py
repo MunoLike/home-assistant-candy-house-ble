@@ -14,12 +14,20 @@ CONF_SECRET_KEY = "secret_key"
 MODEL_SESAME_5_PRO = 7
 MODEL_REMOTE_NANO = 15
 MODEL_BOT_2 = 17
+MODEL_SESAME_6_PRO = 21
+MODEL_BOT_3 = 35
+# Official Android SDK CHProductModel maps these pairs to CHSesame5Device
+# and CHSesameBot2Device respectively (commit 17b39dd19c0f0a2bb27fb8c6617850fc56f4438a).
+LOCK_MODELS = frozenset({MODEL_SESAME_5_PRO, MODEL_SESAME_6_PRO})
+BOT_MODELS = frozenset({MODEL_BOT_2, MODEL_BOT_3})
 # Integration-local model value. It is intentionally outside the one-byte
 # model range used by physical SESAME advertisements.
 MODEL_FAKE_SESAME_BUTTON = 256
 MODEL_NAMES = {
     MODEL_SESAME_5_PRO: "SESAME 5 Pro",
     MODEL_BOT_2: "SESAME Bot 2",
+    MODEL_SESAME_6_PRO: "SESAME 6 Pro",
+    MODEL_BOT_3: "SESAME Bot 3",
     MODEL_FAKE_SESAME_BUTTON: "Fake SESAME Button Bridge",
 }
 
@@ -43,6 +51,10 @@ CONNECT_TIMEOUT = 20.0
 STATUS_TIMEOUT = 12.0
 COMMAND_TIMEOUT = 12.0
 COMMAND_COMPLETION_TIMEOUT = 15.0
+DISCONNECT_TIMEOUT = 5.0
+# BlueZ may still be completing notification teardown when disconnect returns.
+# A short adapter-wide quiet period prevents the next session from racing it.
+BLE_SESSION_SETTLE_DELAY = 0.25
 
 BOT_2_BLE_REFRESH_DELAY = 1.0
 BOT_2_COMMAND_COOLDOWN = 2.0

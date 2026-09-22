@@ -93,11 +93,18 @@ def test_reject_invalid_uri(uri: str) -> None:
         parse_share_uri(uri)
 
 
-def test_decode_qr_image(tmp_path: Path) -> None:
+@pytest.mark.parametrize("model", [7, 17, 21, 35])
+def test_decode_qr_image(tmp_path: Path, model: int) -> None:
     path = tmp_path / "manager.png"
-    write_qr(path, build_uri())
+    write_qr(path, build_uri(model=model, name=""))
 
     credential = decode_share_qr_image(path)
+
+    assert credential.model == model
+    assert credential.name == {
+        7: "SESAME 5 Pro", 17: "SESAME Bot 2",
+        21: "SESAME 6 Pro", 35: "SESAME Bot 3",
+    }[model]
 
     assert credential.secret_key == SECRET_KEY
     assert credential.device_id == DEVICE_ID.bytes

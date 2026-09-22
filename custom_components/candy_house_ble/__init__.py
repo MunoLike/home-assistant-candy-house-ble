@@ -8,13 +8,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
 from .const import (
+    BOT_MODELS,
     CONF_DEVICE_ID,
     CONF_MODEL,
     CONF_REMOTES,
     DOMAIN,
+    LOCK_MODELS,
     MODEL_BOT_2,
     MODEL_FAKE_SESAME_BUTTON,
-    MODEL_SESAME_5_PRO,
 )
 from .coordinator import SesameStatusCoordinator
 
@@ -47,9 +48,9 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
 
 def platforms_for_model(model: int) -> list[Platform]:
     """Return only the platforms supported for one device model."""
-    if model == MODEL_SESAME_5_PRO:
+    if model in LOCK_MODELS:
         return LOCK_PLATFORMS
-    if model == MODEL_BOT_2:
+    if model in BOT_MODELS:
         return BOT_2_PLATFORMS
     if model == MODEL_FAKE_SESAME_BUTTON:
         return FAKE_SESAME_PLATFORMS
@@ -121,7 +122,7 @@ async def async_setup_entry(
         return True
 
     coordinator = SesameStatusCoordinator(hass, entry)
-    if entry.data[CONF_MODEL] == MODEL_BOT_2:
+    if entry.data[CONF_MODEL] in BOT_MODELS:
         await coordinator.async_refresh()
     else:
         await coordinator.async_config_entry_first_refresh()

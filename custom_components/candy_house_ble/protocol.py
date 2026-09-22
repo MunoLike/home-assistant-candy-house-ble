@@ -1,6 +1,6 @@
 """Constrained CANDY HOUSE SESAME OS3 protocol helpers.
 
-Only login, lock, unlock, and the ten fixed Bot 2 script packets can be built.
+Only login, lock, unlock, and the ten fixed Bot 2/3 script packets can be built.
 There is deliberately no generic encrypted-command builder.
 """
 
@@ -25,8 +25,8 @@ ITEM_MECH_STATUS = 81
 ITEM_LOCK = 82
 ITEM_UNLOCK = 83
 
-# Official Android SDK commit 436249f77f21302aa69956bfe487d2670b997e9f
-# maps Bot 2 script slots 0..9 to item codes 170..179.
+# Official Android SDK commit 17b39dd19c0f0a2bb27fb8c6617850fc56f4438a
+# maps Bot 2/3 script slots 0..9 to item codes 170..179.
 BOT_2_RUN_SCRIPT_ITEM_BASE = 170
 BOT_2_SCRIPT_COUNT = 10
 
@@ -162,16 +162,16 @@ def build_unlock_packet(cipher: SesameSessionCipher) -> bytes:
 
 
 def bot_2_run_script_item_code(script_index: int) -> int:
-    """Return the allowlisted Bot 2 item code for a script slot."""
+    """Return the allowlisted Bot 2/3 item code for a script slot."""
     if type(script_index) is not int or not 0 <= script_index < BOT_2_SCRIPT_COUNT:
-        raise ProtocolError("Invalid SESAME Bot 2 script index")
+        raise ProtocolError("Invalid SESAME Bot 2/3 script index")
     return BOT_2_RUN_SCRIPT_ITEM_BASE + script_index
 
 
 def build_bot_2_run_script_packet(
     cipher: SesameSessionCipher, script_index: int
 ) -> bytes:
-    """Build one allowlisted SESAME Bot 2 script packet."""
+    """Build one allowlisted SESAME Bot 2/3 script packet."""
     item_code = bot_2_run_script_item_code(script_index)
     plaintext = bytes((item_code,)) + HISTORY_TAG_ANDROID_USER_BLE
     return bytes(((SEGMENT_CIPHER << 1) | 1,)) + cipher.encrypt(plaintext)
@@ -203,7 +203,7 @@ def parse_notification(
 
 
 def parse_mechanism_status(payload: bytes) -> MechanismStatus:
-    """Parse the seven-byte SESAME 5 mechanism status."""
+    """Parse the seven-byte SESAME 5/6 mechanism status."""
     if len(payload) < 7:
         raise ProtocolError("Truncated mechanism status")
 
@@ -213,12 +213,13 @@ def parse_mechanism_status(payload: bytes) -> MechanismStatus:
     position = int.from_bytes(payload[4:6], "little", signed=True)
     flags = payload[6]
 
-    if flags & 0b00000010:
-        state = LockState.LOCKED
-    elif flags & 0b00000100:
-        state = LockState.UNLOCKED
-    else:
-        state = LockState.MOVED
+    # The official CHSesame5MechStatus shared by SESAME 5/6 defines bit 1 as
+    # isInLockRange.  Unlike Bot 2/3, bit 2 is not an unlocked-state flag.
+    state = (
+        LockState.LOCKED
+        if flags & 0b00000010
+        else LockState.UNLOCKED
+    )
 
     return MechanismStatus(
         state=state,
@@ -232,11 +233,11 @@ def parse_mechanism_status(payload: bytes) -> MechanismStatus:
 
 
 def parse_bot_2_mechanism_status(payload: bytes) -> MechanismStatus:
-    """Parse the official three-byte SESAME Bot 2 mechanism status."""
+    """Parse the official three-byte SESAME Bot 2/3 mechanism status."""
     if len(payload) == 7:
         return parse_mechanism_status(payload)
     if len(payload) != 3:
-        raise ProtocolError("Invalid SESAME Bot 2 mechanism status")
+        raise ProtocolError("Invalid SESAME Bot 2/3 mechanism status")
 
     flags = payload[2]
     return MechanismStatus(

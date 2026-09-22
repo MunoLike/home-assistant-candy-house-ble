@@ -19,9 +19,9 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import CandyHouseConfigEntry
 from .const import (
     BOT_2_BATTERY_DIVIDER_RATIO,
+    BOT_MODELS,
     CONF_MODEL,
-    MODEL_BOT_2,
-    MODEL_SESAME_5_PRO,
+    LOCK_MODELS,
     SESAME_5_PRO_BATTERY_DIVIDER_RATIO,
 )
 from .entity import CandyHouseEntity
@@ -33,7 +33,7 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up read-only SESAME sensors."""
-    if entry.data[CONF_MODEL] == MODEL_BOT_2:
+    if entry.data[CONF_MODEL] in BOT_MODELS:
         entities = [
             SesameBatteryVoltageSensor(entry),
             SesameSignalStrengthSensor(entry),
@@ -60,7 +60,7 @@ class SesameBatteryVoltageSensor(CandyHouseEntity, SensorEntity):
 
     def __init__(self, entry: CandyHouseConfigEntry) -> None:
         super().__init__(entry, "battery_voltage")
-        if entry.data[CONF_MODEL] != MODEL_SESAME_5_PRO:
+        if entry.data[CONF_MODEL] not in LOCK_MODELS:
             self._divider_ratio = BOT_2_BATTERY_DIVIDER_RATIO
 
     @property

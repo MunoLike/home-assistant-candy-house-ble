@@ -74,11 +74,11 @@ def test_service_info_rssi_is_optional(
     assert service_info_rssi(service_info) == expected
 
 
-def status_client() -> SesameStatusClient:
+def status_client(model: int = 7) -> SesameStatusClient:
     """Build a client without touching Home Assistant Bluetooth."""
     return SesameStatusClient(
         SimpleNamespace(),
-        7,
+        model,
         bytes.fromhex("12345678123456781234567812345678"),
         SECRET_KEY,
         "Test lock",
@@ -86,10 +86,11 @@ def status_client() -> SesameStatusClient:
 
 
 @pytest.mark.asyncio
-async def test_bot_2_login_and_status_are_read_only() -> None:
+@pytest.mark.parametrize("model", [17, 35])
+async def test_bot_2_login_and_status_are_read_only(model) -> None:
     client = SesameStatusClient(
         SimpleNamespace(),
-        17,
+        model,
         bytes.fromhex("12345678123456781234567812345678"),
         SECRET_KEY,
         "Test Bot 2",
@@ -97,6 +98,7 @@ async def test_bot_2_login_and_status_are_read_only() -> None:
     gatt = SimpleNamespace(write_gatt_char=AsyncMock())
     client._client = gatt
     client._session_generation = 1
+    client._notify_ready_event.set()
 
     await client._async_handle_notification(
         1,
@@ -136,14 +138,20 @@ async def test_bot_2_login_and_status_are_read_only() -> None:
 
 
 @pytest.mark.asyncio
-async def test_complete_bot_2_poll_writes_only_login(monkeypatch) -> None:
+@pytest.mark.parametrize("model", [7, 17, 21, 35])
+async def test_complete_os3_poll_writes_only_login(model, monkeypatch) -> None:
     hass = FakeHass()
     client = SesameStatusClient(
         hass,
-        17,
+        model,
         bytes.fromhex("12345678123456781234567812345678"),
         SECRET_KEY,
         "Test Bot 2",
+    )
+    status_payload = (
+        (3012).to_bytes(2, "little") + bytes((0b00000110,))
+        if model in (17, 35)
+        else (3012).to_bytes(2, "little") + bytes.fromhex("0080aaff12")
     )
     expected_login, server_cipher = build_login_packet(SECRET_KEY, TOKEN)
     notify_callback = None
@@ -160,6 +168,8 @@ async def test_complete_bot_2_poll_writes_only_login(monkeypatch) -> None:
                 )
             ),
         )
+        await asyncio.sleep(0)
+        assert gatt.write_gatt_char.await_count == 0
 
     async def write_gatt_char(characteristic, packet, response=False) -> None:
         assert characteristic == WRITE_CHARACTERISTIC_UUID
@@ -184,8 +194,7 @@ async def test_complete_bot_2_poll_writes_only_login(monkeypatch) -> None:
                     SEGMENT_CIPHER,
                     server_cipher.encrypt(
                         bytes((OP_PUBLISH, ITEM_MECH_STATUS))
-                        + (3012).to_bytes(2, "little")
-                        + bytes((0b00000110,))
+                        + status_payload
                     ),
                 )
             ),
@@ -202,9 +211,10 @@ async def test_complete_bot_2_poll_writes_only_login(monkeypatch) -> None:
         "async_resolve_service_info",
         AsyncMock(return_value=SimpleNamespace(device=object(), rssi=-55)),
     )
+    establish = AsyncMock(return_value=gatt)
     monkeypatch.setattr(
         "custom_components.candy_house_ble.client.establish_connection",
-        AsyncMock(return_value=gatt),
+        establish,
     )
 
     status = await client.async_read_status()
@@ -213,6 +223,9 @@ async def test_complete_bot_2_poll_writes_only_login(monkeypatch) -> None:
 
     assert status.battery_raw == 3012
     assert status.stopped is True
+    assert status.state is LockState.LOCKED
+    assert status.position == (None if model in (17, 35) else -86)
+    assert establish.await_args.kwargs["use_services_cache"] is False
     assert gatt.write_gatt_char.await_count == 1
     gatt.write_gatt_char.assert_awaited_once_with(
         WRITE_CHARACTERISTIC_UUID, expected_login, response=False
@@ -246,13 +259,15 @@ def mechanism_status(
         ("async_unlock", "0548ed1489b0abd7", LockState.UNLOCKED),
     ],
 )
+@pytest.mark.parametrize("model", [7, 21])
 async def test_fixed_command_success(
+    model,
     monkeypatch,
     method_name: str,
     expected_packet: str,
     terminal_state: LockState,
 ) -> None:
-    client = status_client()
+    client = status_client(model)
     gatt = SimpleNamespace(is_connected=False, write_gatt_char=AsyncMock())
 
     async def acknowledge(*_args, **_kwargs) -> None:
@@ -282,8 +297,9 @@ async def test_fixed_command_success(
 
 
 @pytest.mark.asyncio
-async def test_rejected_command_is_reported(monkeypatch) -> None:
-    client = status_client()
+@pytest.mark.parametrize("model", [7, 21])
+async def test_rejected_command_is_reported(model, monkeypatch) -> None:
+    client = status_client(model)
     gatt = SimpleNamespace(is_connected=False, write_gatt_char=AsyncMock())
 
     async def reject(*_args, **_kwargs) -> None:
@@ -307,8 +323,9 @@ async def test_rejected_command_is_reported(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_authentication_error_sends_no_command(monkeypatch) -> None:
-    client = status_client()
+@pytest.mark.parametrize("model", [7, 21])
+async def test_authentication_error_sends_no_command(model, monkeypatch) -> None:
+    client = status_client(model)
     gatt = SimpleNamespace(is_connected=False, write_gatt_char=AsyncMock())
 
     async def connect():
@@ -327,12 +344,14 @@ async def test_authentication_error_sends_no_command(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method_name", ["async_lock", "async_unlock"])
+@pytest.mark.parametrize("model", [17, 35])
 async def test_bot_2_rejects_lock_commands_before_connecting(
+    model,
     method_name: str,
 ) -> None:
     client = SesameStatusClient(
         SimpleNamespace(),
-        17,
+        model,
         bytes.fromhex("12345678123456781234567812345678"),
         SECRET_KEY,
         "Test Bot 2",
@@ -343,10 +362,11 @@ async def test_bot_2_rejects_lock_commands_before_connecting(
 
 
 @pytest.mark.asyncio
-async def test_bot_2_fixed_script_success(monkeypatch) -> None:
+@pytest.mark.parametrize("model", [17, 35])
+async def test_bot_2_fixed_script_success(model, monkeypatch) -> None:
     client = SesameStatusClient(
         SimpleNamespace(),
-        17,
+        model,
         bytes.fromhex("12345678123456781234567812345678"),
         SECRET_KEY,
         "Test Bot 2",
@@ -377,8 +397,9 @@ async def test_bot_2_fixed_script_success(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_lock_model_rejects_bot_2_script_before_connecting() -> None:
-    client = status_client()
+@pytest.mark.parametrize("model", [7, 21])
+async def test_lock_model_rejects_bot_2_script_before_connecting(model) -> None:
+    client = status_client(model)
 
     with pytest.raises(SesameConnectionError, match="not supported"):
         await client.async_run_script(7)
@@ -386,12 +407,14 @@ async def test_lock_model_rejects_bot_2_script_before_connecting() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("script_index", [-1, 10, True, 1.5, "1"])
+@pytest.mark.parametrize("model", [17, 35])
 async def test_bot_2_rejects_invalid_script_before_connecting(
+    model,
     script_index, monkeypatch
 ) -> None:
     client = SesameStatusClient(
         SimpleNamespace(),
-        17,
+        model,
         bytes.fromhex("12345678123456781234567812345678"),
         SECRET_KEY,
         "Test Bot 2",
@@ -406,10 +429,11 @@ async def test_bot_2_rejects_invalid_script_before_connecting(
 
 
 @pytest.mark.asyncio
-async def test_bot_2_ack_starts_double_tap_cooldown(monkeypatch) -> None:
+@pytest.mark.parametrize("model", [17, 35])
+async def test_bot_2_ack_starts_double_tap_cooldown(model, monkeypatch) -> None:
     client = SesameStatusClient(
         SimpleNamespace(),
-        17,
+        model,
         bytes.fromhex("12345678123456781234567812345678"),
         SECRET_KEY,
         "Test Bot 2",
@@ -438,10 +462,11 @@ async def test_bot_2_ack_starts_double_tap_cooldown(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_bot_2_lost_ack_blocks_ambiguous_retry(monkeypatch) -> None:
+@pytest.mark.parametrize("model", [17, 35])
+async def test_bot_2_lost_ack_blocks_ambiguous_retry(model, monkeypatch) -> None:
     client = SesameStatusClient(
         SimpleNamespace(),
-        17,
+        model,
         bytes.fromhex("12345678123456781234567812345678"),
         SECRET_KEY,
         "Test Bot 2",
@@ -468,12 +493,14 @@ async def test_bot_2_lost_ack_blocks_ambiguous_retry(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model", [17, 35])
 async def test_bot_2_write_failure_is_indeterminate_and_not_retried(
+    model,
     monkeypatch,
 ) -> None:
     client = SesameStatusClient(
         SimpleNamespace(),
-        17,
+        model,
         bytes.fromhex("12345678123456781234567812345678"),
         SECRET_KEY,
         "Test Bot 2",
@@ -500,12 +527,14 @@ async def test_bot_2_write_failure_is_indeterminate_and_not_retried(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model", [17, 35])
 async def test_bot_2_connect_failure_reports_no_command_sent(
+    model,
     monkeypatch,
 ) -> None:
     client = SesameStatusClient(
         SimpleNamespace(),
-        17,
+        model,
         bytes.fromhex("12345678123456781234567812345678"),
         SECRET_KEY,
         "Test Bot 2",
@@ -522,8 +551,9 @@ async def test_bot_2_connect_failure_reports_no_command_sent(
 
 
 @pytest.mark.asyncio
-async def test_critical_terminal_status_is_reported(monkeypatch) -> None:
-    client = status_client()
+@pytest.mark.parametrize("model", [7, 21])
+async def test_critical_terminal_status_is_reported(model, monkeypatch) -> None:
+    client = status_client(model)
     gatt = SimpleNamespace(is_connected=False, write_gatt_char=AsyncMock())
 
     async def acknowledge(*_args, **_kwargs) -> None:
@@ -548,8 +578,9 @@ async def test_critical_terminal_status_is_reported(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stopped_outside_requested_range_is_reported(monkeypatch) -> None:
-    client = status_client()
+@pytest.mark.parametrize("model", [7, 21])
+async def test_stopped_outside_requested_range_is_reported(model, monkeypatch) -> None:
+    client = status_client(model)
     gatt = SimpleNamespace(is_connected=False, write_gatt_char=AsyncMock())
 
     async def acknowledge(*_args, **_kwargs) -> None:
@@ -572,8 +603,9 @@ async def test_stopped_outside_requested_range_is_reported(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_disconnect_after_acknowledgement_is_reported(monkeypatch) -> None:
-    client = status_client()
+@pytest.mark.parametrize("model", [7, 21])
+async def test_disconnect_after_acknowledgement_is_reported(model, monkeypatch) -> None:
+    client = status_client(model)
     gatt = SimpleNamespace(is_connected=False, write_gatt_char=AsyncMock())
 
     async def acknowledge_then_disconnect(*_args, **_kwargs) -> None:
@@ -596,10 +628,12 @@ async def test_disconnect_after_acknowledgement_is_reported(monkeypatch) -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model", [7, 21])
 async def test_command_preempts_poll_without_overlapping_sessions(
+    model,
     monkeypatch,
 ) -> None:
-    client = status_client()
+    client = status_client(model)
     active = 0
     maximum_active = 0
     poll_started = asyncio.Event()
@@ -637,19 +671,21 @@ async def test_command_preempts_poll_without_overlapping_sessions(
 
 
 @pytest.mark.asyncio
-async def test_command_cancels_poll_during_connection(monkeypatch) -> None:
-    client = status_client()
+@pytest.mark.parametrize("model", [7, 21])
+async def test_command_waits_for_preempted_poll_subscription_cleanup(
+    model, monkeypatch
+) -> None:
+    client = status_client(model)
     connect_started = asyncio.Event()
-    connect_cancelled = asyncio.Event()
+    finish_connect = asyncio.Event()
+    command_started = asyncio.Event()
 
     async def connect():
         connect_started.set()
-        try:
-            await asyncio.Event().wait()
-        finally:
-            connect_cancelled.set()
+        await finish_connect.wait()
 
     async def execute(*_args):
+        command_started.set()
         return mechanism_status(LockState.UNLOCKED)
 
     monkeypatch.setattr(client, "_async_connect", connect)
@@ -657,17 +693,22 @@ async def test_command_cancels_poll_during_connection(monkeypatch) -> None:
 
     poll = asyncio.create_task(client.async_read_status())
     await connect_started.wait()
-    result = await client.async_unlock()
+    command = asyncio.create_task(client.async_unlock())
+    await asyncio.sleep(0)
 
+    assert not command_started.is_set()
+    finish_connect.set()
+    result = await command
     assert result.state is LockState.UNLOCKED
-    assert connect_cancelled.is_set()
+    assert command_started.is_set()
     with pytest.raises(SesamePollPreempted):
         await poll
 
 
 @pytest.mark.asyncio
-async def test_cancelling_poll_also_cancels_connection_task(monkeypatch) -> None:
-    client = status_client()
+@pytest.mark.parametrize("model", [7, 21])
+async def test_cancelling_poll_also_cancels_connection_task(model, monkeypatch) -> None:
+    client = status_client(model)
     connect_started = asyncio.Event()
     connect_cancelled = asyncio.Event()
 
@@ -692,8 +733,9 @@ async def test_cancelling_poll_also_cancels_connection_task(monkeypatch) -> None
 
 
 @pytest.mark.asyncio
-async def test_stale_session_notification_is_ignored() -> None:
-    client = status_client()
+@pytest.mark.parametrize("model", [7, 21])
+async def test_stale_session_notification_is_ignored(model) -> None:
+    client = status_client(model)
     client._session_generation = 2
 
     await client._async_handle_notification(1, b"\xff")
@@ -702,8 +744,11 @@ async def test_stale_session_notification_is_ignored() -> None:
 
 
 @pytest.mark.asyncio
-async def test_duplicate_command_is_rejected_instead_of_queued(monkeypatch) -> None:
-    client = status_client()
+@pytest.mark.parametrize("model", [7, 21])
+async def test_duplicate_command_is_rejected_instead_of_queued(
+    model, monkeypatch
+) -> None:
+    client = status_client(model)
     entered = asyncio.Event()
     release = asyncio.Event()
 

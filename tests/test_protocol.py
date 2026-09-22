@@ -216,10 +216,10 @@ def test_reject_invalid_bot_2_status(payload: bytes) -> None:
     [
         (0b00000010, LockState.LOCKED),
         (0b00000100, LockState.UNLOCKED),
-        (0, LockState.MOVED),
+        (0, LockState.UNLOCKED),
     ],
 )
-def test_parse_lock_states(flags: int, state: LockState) -> None:
+def test_parse_official_lock_range_flag(flags: int, state: LockState) -> None:
     payload = bytes(6) + bytes((flags,))
 
     assert parse_mechanism_status(payload).state is state

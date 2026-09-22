@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import CandyHouseConfigEntry
-from .const import CONF_MODEL, MODEL_BOT_2
+from .const import BOT_MODELS, CONF_MODEL
 from .entity import CandyHouseEntity
 from .protocol import BOT_2_SCRIPT_COUNT
 
@@ -17,8 +17,8 @@ async def async_setup_entry(
     entry: CandyHouseConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up the ten fixed Bot 2 script buttons."""
-    if entry.data[CONF_MODEL] == MODEL_BOT_2:
+    """Set up the ten fixed Bot 2/3 script buttons."""
+    if entry.data[CONF_MODEL] in BOT_MODELS:
         async_add_entities(
             [
                 SesameBot2RunScriptButton(entry, script_index)
@@ -28,7 +28,7 @@ async def async_setup_entry(
 
 
 class SesameBot2RunScriptButton(CandyHouseEntity, ButtonEntity):
-    """Run one numbered Bot 2 script stored on the physical device."""
+    """Run one numbered Bot 2/3 script stored on the physical device."""
 
     _attr_translation_key = "run_script"
 

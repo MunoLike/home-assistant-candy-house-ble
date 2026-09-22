@@ -75,8 +75,10 @@ def test_bot_2_never_forwards_the_lock_platform() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bot_2_exposes_ten_scripts_and_diagnostics() -> None:
+@pytest.mark.parametrize("model", [17, 35])
+async def test_bot_2_exposes_ten_scripts_and_diagnostics(model) -> None:
     entry = bot_entry()
+    entry.data[CONF_MODEL] = model
     sensor_add = Mock()
     binary_add = Mock()
     button_add = Mock()
@@ -109,10 +111,13 @@ async def test_bot_2_exposes_ten_scripts_and_diagnostics() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model", [17, 35])
 async def test_bot_2_full_setup_and_unload_never_forward_lock(
+    model,
     monkeypatch,
 ) -> None:
     entry = bot_entry()
+    entry.data[CONF_MODEL] = model
     coordinator = SimpleNamespace(
         async_config_entry_first_refresh=AsyncMock(),
         async_refresh=AsyncMock(),
@@ -146,8 +151,10 @@ async def test_bot_2_full_setup_and_unload_never_forward_lock(
 
 
 @pytest.mark.asyncio
-async def test_bot_2_script_button_delegates_its_index_exactly_once() -> None:
+@pytest.mark.parametrize("model", [17, 35])
+async def test_bot_2_script_button_delegates_its_index_exactly_once(model) -> None:
     entry = bot_entry()
+    entry.data[CONF_MODEL] = model
     entry.runtime_data.async_run_script = AsyncMock()
     entity = SesameBot2RunScriptButton(entry, 7)
 
@@ -159,8 +166,10 @@ async def test_bot_2_script_button_delegates_its_index_exactly_once() -> None:
     entry.runtime_data.async_run_script.assert_awaited_once_with(7)
 
 
-def test_bot_2_battery_voltage_uses_single_cell_scale() -> None:
+@pytest.mark.parametrize("model", [17, 35])
+def test_bot_2_battery_voltage_uses_single_cell_scale(model) -> None:
     entry = bot_entry()
+    entry.data[CONF_MODEL] = model
     entry.runtime_data.data = MechanismStatus(
         state=LockState.LOCKED,
         battery_raw=3051,
@@ -176,9 +185,10 @@ def test_bot_2_battery_voltage_uses_single_cell_scale() -> None:
 
 
 @pytest.mark.asyncio
-async def test_model_7_keeps_original_entity_order() -> None:
+@pytest.mark.parametrize("model", [7, 21])
+async def test_model_7_keeps_original_entity_order(model) -> None:
     entry = bot_entry()
-    entry.data[CONF_MODEL] = MODEL_SESAME_5_PRO
+    entry.data[CONF_MODEL] = model
     sensor_add = Mock()
     binary_add = Mock()
 

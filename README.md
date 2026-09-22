@@ -2,8 +2,8 @@
 
 Local Bluetooth integration for CANDY HOUSE SESAME devices in Home Assistant.
 
-The integration supports SESAME 5 Pro and SESAME Bot 2 through Home Assistant
-Bluetooth and ESPHome Bluetooth proxies. It also includes an ESPHome Fake
+The integration supports SESAME 5 Pro, SESAME 6 Pro, SESAME Bot 2, and SESAME
+Bot 3 through Home Assistant Bluetooth and ESPHome Bluetooth proxies. It also includes an ESPHome Fake
 SESAME button bridge for reusing CANDY HOUSE Remotes as Home Assistant buttons.
 Physical-device setup accepts a manager share QR
 image, decodes it inside Home Assistant, stores only the parsed credential in
@@ -29,7 +29,7 @@ raw packets or exception messages and resets whenever the entry reloads or Core
 restarts. The observation timestamp identifies the measured interval; entity
 availability/history is the durable view across restarts.
 
-SESAME Bot 2 exposes ten buttons for directly running on-device script slots
+SESAME Bot 2 and Bot 3 expose ten buttons for directly running on-device script slots
 0 through 9. Script actions and slot meanings are edited in the official app;
 Home Assistant deliberately does not edit scripts or cache semantic aliases.
 The item-code mapping is pinned to the official Android SDK behavior at commit
@@ -37,7 +37,7 @@ The item-code mapping is pinned to the official Android SDK behavior at commit
 Commands are serialized through device acknowledgement and are never retried.
 A short cooldown rejects accidental double presses; an acknowledgement timeout
 is reported as an indeterminate outcome and applies a longer retry cooldown.
-Bot 2 diagnostic entities expose battery voltage, Bluetooth signal strength,
+Bot 2/3 diagnostic entities expose battery voltage, Bluetooth signal strength,
 and whether the motor is moving.
 
 ## Fake SESAME button bridge
@@ -94,6 +94,23 @@ CANDY HOUSE BLE **Remote button** event entity have also been validated. The
 per-Remote identity and physical routing paths have been validated with both
 buttons on two Remote Nano devices.
 
+SESAME 6 Pro (model 21) and SESAME Bot 3 (model 35) support is a local
+extension of v0.3.0. Both pass simulated BLE and entity tests; physical-device
+validation is still pending. The official Android SDK maps them to the same
+lock and Bot implementations as SESAME 5 Pro and Bot 2, respectively:
+[`CHProductModel` at `17b39dd`](https://github.com/CANDY-HOUSE/SesameSDK_Android_with_DemoApp/blob/17b39dd19c0f0a2bb27fb8c6617850fc56f4438a/sesame-sdk/src/main/java/co/candyhouse/sesame/open/devices/base/CHDeivceProtocols.kt).
+The existing OS3 status parsing and battery-voltage scaling are reused (locks:
+raw millivolts × 2; Bots: raw millivolts). Verify voltage readings on hardware.
+
+To install this local extension, copy `custom_components/candy_house_ble` to
+Home Assistant's `config/custom_components/` directory and restart Core. Add
+each device under **Settings → Devices & services → Add integration →
+CANDY HOUSE BLE** using its manager share QR image from the official app.
+Configure Bot 3 script slots in the official app before pressing their buttons.
+After installation, check status and battery readings, then test one Bot script
+and both lock operations on the physical devices. Reinstalling the published
+v0.3.0 through HACS replaces these local changes.
+
 ## Releases
 
 `VERSION` is the repository source of truth. Every stable release versions the
@@ -115,8 +132,8 @@ still points to the current `main` commit.
 - QR images and raw `ssm://` URIs are temporary input and are not logged.
 - Real device credentials are never test fixtures and must not be committed.
 - Tests generate synthetic credentials and QR images at runtime.
-- The command surface is limited to lock, unlock, and Bot 2 script slots 0
-  through 9; there is no generic BLE or cloud command method and no Bot 2
+- The command surface is limited to lock, unlock, and Bot 2/3 script slots 0
+  through 9; there is no generic BLE or cloud command method and no Bot 2/3
   script-editing method.
 - Version 4 config-entry migration removes the Web API options formerly stored
   by version 3. BLE manager credentials remain redacted from diagnostics and
