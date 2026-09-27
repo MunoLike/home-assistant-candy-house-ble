@@ -233,6 +233,41 @@ async def test_complete_os3_poll_writes_only_login(model, monkeypatch) -> None:
     gatt.disconnect.assert_awaited_once_with()
 
 
+@pytest.mark.asyncio
+async def test_stalled_notification_subscription_releases_connection(
+    monkeypatch,
+) -> None:
+    """A stuck BlueZ subscription cannot block later devices indefinitely."""
+    client = status_client()
+
+    async def stalled_notify(*_args) -> None:
+        await asyncio.sleep(10)
+
+    gatt = SimpleNamespace(
+        is_connected=True,
+        start_notify=AsyncMock(side_effect=stalled_notify),
+        disconnect=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "custom_components.candy_house_ble.client.async_resolve_service_info",
+        AsyncMock(return_value=SimpleNamespace(device=object())),
+    )
+    monkeypatch.setattr(
+        "custom_components.candy_house_ble.client.establish_connection",
+        AsyncMock(return_value=gatt),
+    )
+    monkeypatch.setattr(
+        "custom_components.candy_house_ble.client.NOTIFY_TIMEOUT", 0.01
+    )
+
+    with pytest.raises(SesameConnectionError, match="Timed out waiting") as err:
+        await client.async_read_status()
+
+    assert isinstance(err.value.__cause__, TimeoutError)
+    gatt.start_notify.assert_awaited_once()
+    gatt.disconnect.assert_awaited_once_with()
+
+
 def mechanism_status(
     state: LockState,
     *,

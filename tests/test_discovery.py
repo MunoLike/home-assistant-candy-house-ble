@@ -9,6 +9,7 @@ import pytest
 from custom_components.candy_house_ble.const import SERVICE_UUID
 from custom_components.candy_house_ble.discovery import (
     advertisement_matches,
+    async_resolve_service_info,
     async_resolve_with_scan,
     find_matching_service_info,
 )
@@ -90,3 +91,30 @@ async def test_resolver_does_not_persist_previous_address() -> None:
     assert second is not None
     assert first.device.address == "first-address"
     assert second.device.address == "rotated-address"
+
+
+@pytest.mark.asyncio
+async def test_resolver_waits_for_matching_advertisement(monkeypatch) -> None:
+    """An absent device uses the supported HA advertisement API."""
+    from homeassistant.components import bluetooth
+
+    info = service_info("address-after-advertisement")
+    discoveries = iter(([], [info]))
+    monkeypatch.setattr(
+        bluetooth,
+        "async_discovered_service_info",
+        lambda hass, connectable: next(discoveries),
+    )
+
+    async def process(hass, callback, matcher, mode, timeout):
+        assert matcher == {"service_uuid": SERVICE_UUID, "connectable": True}
+        assert mode == bluetooth.BluetoothScanningMode.ACTIVE
+        assert timeout == 10
+        assert callback(info)
+        return info
+
+    monkeypatch.setattr(bluetooth, "async_process_advertisements", process)
+
+    result = await async_resolve_service_info(object(), 7, DEVICE_ID)
+
+    assert result is info

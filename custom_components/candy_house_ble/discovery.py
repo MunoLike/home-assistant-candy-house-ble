@@ -67,7 +67,7 @@ async def async_resolve_with_scan[ServiceInfoT](
 async def async_resolve_service_info(
     hass: HomeAssistant, model: int, device_id: bytes
 ) -> BluetoothServiceInfoBleak | None:
-    """Resolve the current BLE device, requesting one fresh scan if necessary."""
+    """Resolve a connectable device from current or incoming advertisements."""
     from homeassistant.components import bluetooth
 
     def get_current() -> BluetoothServiceInfoBleak | None:
@@ -77,6 +77,18 @@ async def async_resolve_service_info(
             device_id,
         )
 
-    return await async_resolve_with_scan(
-        get_current, lambda: bluetooth.async_request_active_scan(hass)
-    )
+    async def wait_for_advertisement() -> None:
+        try:
+            await bluetooth.async_process_advertisements(
+                hass,
+                lambda info: advertisement_matches(
+                    info.service_uuids, info.manufacturer_data, model, device_id
+                ),
+                {"service_uuid": SERVICE_UUID, "connectable": True},
+                bluetooth.BluetoothScanningMode.ACTIVE,
+                10,
+            )
+        except TimeoutError:
+            pass
+
+    return await async_resolve_with_scan(get_current, wait_for_advertisement)

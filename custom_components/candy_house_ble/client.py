@@ -23,6 +23,7 @@ from .const import (
     DISCONNECT_TIMEOUT,
     LOCK_MODELS,
     NOTIFY_CHARACTERISTIC_UUID,
+    NOTIFY_TIMEOUT,
     STATUS_TIMEOUT,
     WRITE_CHARACTERISTIC_UUID,
 )
@@ -572,12 +573,15 @@ class SesameStatusClient:
                 # target a stale WriteValue object on the next session.
                 use_services_cache=False,
             )
-        await self._client.start_notify(
-            NOTIFY_CHARACTERISTIC_UUID,
-            lambda sender, data: self._on_notification(
-                generation, sender, data
-            ),
-        )
+        # A stalled BlueZ StartNotify call must not hold the adapter-wide
+        # session gate forever and block every other SESAME device at setup.
+        async with asyncio.timeout(NOTIFY_TIMEOUT):
+            await self._client.start_notify(
+                NOTIFY_CHARACTERISTIC_UUID,
+                lambda sender, data: self._on_notification(
+                    generation, sender, data
+                ),
+            )
         self._notify_ready_event.set()
         return service_info
 
