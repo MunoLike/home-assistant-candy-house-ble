@@ -60,6 +60,10 @@ class SesameConnectionError(Exception):
     """Raised when a constrained BLE status or operation session fails."""
 
 
+class SesameTransientConnectionError(SesameConnectionError):
+    """A status read may recover by opening one fresh BLE session."""
+
+
 class SesamePollPreempted(Exception):
     """Raised when a UI operation supersedes a background status poll."""
 
@@ -131,16 +135,25 @@ class SesameStatusClient:
             self._poll_preempted = False
             self._poll_preempt_event.clear()
             try:
-                async with (
-                    self._session_gate.poll(self._preempt_poll),
-                    self._operation_lock,
-                ):
-                    if (
-                        self._actuation_lock.locked()
-                        or self._poll_preempted
-                    ):
-                        raise SesamePollPreempted
-                    status = await self._async_read_status_locked()
+                for attempt in range(2):
+                    try:
+                        async with (
+                            self._session_gate.poll(self._preempt_poll),
+                            self._operation_lock,
+                        ):
+                            if (
+                                self._actuation_lock.locked()
+                                or self._poll_preempted
+                            ):
+                                raise SesamePollPreempted
+                            status = await self._async_read_status_locked()
+                    except SesameTransientConnectionError:
+                        if attempt:
+                            raise
+                        # Retry only read-only status. Release the adapter
+                        # between attempts so operations still have priority.
+                    else:
+                        break
             finally:
                 self._poll_active = False
         except SesamePollPreempted:
@@ -283,12 +296,12 @@ class SesameStatusClient:
             if self._notification_error is not None:
                 raise self._notification_error
             if self._status is None:
-                raise SesameConnectionError(
+                raise SesameTransientConnectionError(
                     "SESAME disconnected before publishing status"
                 )
             return replace(self._status, rssi=service_info_rssi(service_info))
         except TimeoutError as err:
-            raise SesameConnectionError(
+            raise SesameTransientConnectionError(
                 "Timed out waiting for SESAME status"
                 f"{self._notification_context()}"
             ) from err
@@ -687,9 +700,12 @@ class SesameStatusClient:
     def _on_disconnect(
         self,
         generation: int,
-        _client: BleakClientWithServiceCache,
+        client: BleakClientWithServiceCache,
     ) -> None:
-        if generation != self._session_generation:
+        # Bleak may disconnect and retry before establish_connection returns.
+        # Those callbacks must not wake status/login waiters or release the
+        # notification barrier for the connection that eventually succeeds.
+        if generation != self._session_generation or client is not self._client:
             return
         self._notify_ready_event.set()
         self._login_event.set()

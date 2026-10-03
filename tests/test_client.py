@@ -12,6 +12,7 @@ from custom_components.candy_house_ble.client import (
     SesameConnectionError,
     SesamePollPreempted,
     SesameStatusClient,
+    SesameTransientConnectionError,
     service_info_rssi,
 )
 from custom_components.candy_house_ble.const import WRITE_CHARACTERISTIC_UUID
@@ -139,7 +140,10 @@ async def test_bot_2_login_and_status_are_read_only(model) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", [7, 17, 21, 35])
-async def test_complete_os3_poll_writes_only_login(model, monkeypatch) -> None:
+@pytest.mark.parametrize("failed_connection_attempt", [False, True])
+async def test_complete_os3_poll_writes_only_login(
+    model, failed_connection_attempt, monkeypatch
+) -> None:
     hass = FakeHass()
     client = SesameStatusClient(
         hass,
@@ -211,7 +215,14 @@ async def test_complete_os3_poll_writes_only_login(model, monkeypatch) -> None:
         "async_resolve_service_info",
         AsyncMock(return_value=SimpleNamespace(device=object(), rssi=-55)),
     )
-    establish = AsyncMock(return_value=gatt)
+    async def establish_with_retry(*_args, **kwargs):
+        if failed_connection_attempt:
+            # Bleak can invoke this during a failed connection attempt, then
+            # retry successfully before establish_connection returns.
+            kwargs["disconnected_callback"](gatt)
+        return gatt
+
+    establish = AsyncMock(side_effect=establish_with_retry)
     monkeypatch.setattr(
         "custom_components.candy_house_ble.client.establish_connection",
         establish,
@@ -264,8 +275,92 @@ async def test_stalled_notification_subscription_releases_connection(
         await client.async_read_status()
 
     assert isinstance(err.value.__cause__, TimeoutError)
-    gatt.start_notify.assert_awaited_once()
-    gatt.disconnect.assert_awaited_once_with()
+    assert gatt.start_notify.await_count == 2
+    assert gatt.disconnect.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [7, 17, 21, 35])
+async def test_only_active_connection_disconnect_wakes_waiters(model) -> None:
+    """Delayed disconnects from a failed attempt cannot terminate its retry."""
+    client = status_client(model)
+    active_gatt = SimpleNamespace()
+    failed_gatt = SimpleNamespace()
+    client._session_generation = 1
+    client._client = active_gatt
+
+    client._on_disconnect(1, failed_gatt)
+
+    assert not client._status_event.is_set()
+    assert not client._login_event.is_set()
+    assert not client._command_event.is_set()
+    assert client._status_queue.empty()
+
+    client._on_disconnect(1, active_gatt)
+
+    assert client._status_event.is_set()
+    assert client._login_event.is_set()
+    assert client._command_event.is_set()
+    assert await client._status_queue.get() is None
+
+
+@pytest.mark.asyncio
+async def test_transient_status_read_retries_one_fresh_session() -> None:
+    """A single transport failure does not make a recovered poll unavailable."""
+    client = status_client(21)
+    status = mechanism_status(LockState.LOCKED)
+    client._async_read_status_locked = AsyncMock(
+        side_effect=[SesameTransientConnectionError("timeout"), status]
+    )
+
+    assert await client.async_read_status() is status
+    assert client._async_read_status_locked.await_count == 2
+    metrics = client.diagnostics_snapshot()["operations"]["poll"]
+    assert metrics["successes"] == 1
+    assert metrics["failures"] == 0
+
+
+@pytest.mark.asyncio
+async def test_persistent_status_read_failure_is_not_hidden() -> None:
+    client = status_client(21)
+    client._async_read_status_locked = AsyncMock(
+        side_effect=SesameTransientConnectionError("timeout")
+    )
+
+    with pytest.raises(SesameTransientConnectionError):
+        await client.async_read_status()
+
+    assert client._async_read_status_locked.await_count == 2
+    assert client.diagnostics_snapshot()["operations"]["poll"]["failures"] == 1
+
+
+@pytest.mark.asyncio
+async def test_authentication_failure_is_not_retried() -> None:
+    client = status_client(21)
+    client._async_read_status_locked = AsyncMock(
+        side_effect=SesameConnectionError("SESAME rejected the manager credential")
+    )
+
+    with pytest.raises(SesameConnectionError, match="rejected"):
+        await client.async_read_status()
+
+    client._async_read_status_locked.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_command_can_preempt_transient_status_retry() -> None:
+    client = status_client(21)
+
+    async def failed_read():
+        client._preempt_poll()
+        raise SesameTransientConnectionError("disconnected")
+
+    client._async_read_status_locked = AsyncMock(side_effect=failed_read)
+
+    with pytest.raises(SesamePollPreempted):
+        await client.async_read_status()
+
+    client._async_read_status_locked.assert_awaited_once_with()
 
 
 def mechanism_status(
